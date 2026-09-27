@@ -1,0 +1,4 @@
+.pixi/
+excalidraw/
+__pycache__/
+pixi.lock

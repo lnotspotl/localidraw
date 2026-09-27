@@ -1,0 +1,38 @@
+# Config only. localidraw is not installed as a package; pixi.toml is the manifest.
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+include = ["*.py"]
+extend-exclude = ["excalidraw"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812", "ISC001",  # clash with the formatter
+    "D1",                # docstrings are optional
+    "CPY",               # no copyright headers
+    "EM", "TRY003",      # exception messages stay inline
+    "S603",              # advisory only; every subprocess call trips it
+    "T201",              # a CLI: printing is the product
+    "PLC0415",           # huggingface_hub is imported lazily, so the CLI starts fast
+    "S310",              # urlopen only ever targets our own localhost server
+    "S607",              # pixi comes from PATH, deliberately
+    # The HTTP handlers and argparse main are dispatch tables, and _sync is one
+    # linear four-phase pass; splitting them only scatters the flow.
+    "C901", "PLR0911", "PLR0912", "PLR0915",
+    # Deliberate en dashes, ∕ in bucket file names, › and × in UI and drawing text.
+    "RUF001", "RUF002", "RUF003",
+    # Timestamps in ids, history file names and the gallery are the user's local wall clock.
+    "DTZ005", "DTZ006",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/**" = ["PLR0913", "PLR0917", "INP001"]  # standalone scripts; primitives take coordinates positionally
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+strict = true
+files = ["localidraw.py", "examples"]

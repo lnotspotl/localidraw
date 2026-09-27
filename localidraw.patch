@@ -1,0 +1,368 @@
+diff --git a/excalidraw-app/App.tsx b/excalidraw-app/App.tsx
+index 8b9f9403..83cc4f7d 100644
+--- a/excalidraw-app/App.tsx
++++ b/excalidraw-app/App.tsx
+@@ -102,6 +102,12 @@ import Collab, {
+ import { AppFooter } from "./components/AppFooter";
+ import { AppMainMenu } from "./components/AppMainMenu";
+ import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
++import {
++  GALLERY_URL,
++  isLocalidraw,
++  saveToLocalidraw,
++  startLocalidraw,
++} from "./localidraw";
+ import {
+   ExportToExcalidrawPlus,
+   exportToExcalidrawPlus,
+@@ -146,7 +152,6 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
+ 
+ import "./index.scss";
+ 
+-import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
+ import { AppSidebar } from "./components/AppSidebar";
+ 
+ import type { CollabAPI } from "./collab/Collab";
+@@ -565,6 +570,7 @@ const ExcalidrawWrapper = () => {
+     initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
+       loadImages(data, /* isInitialLoad */ true);
+       initialStatePromiseRef.current.promise.resolve(data.scene);
++      startLocalidraw(excalidrawAPI);
+     });
+ 
+     const onHashChange = async (event: HashChangeEvent) => {
+@@ -603,7 +609,12 @@ const ExcalidrawWrapper = () => {
+         ((collabAPI && !collabAPI.isCollaborating()) || isCollabDisabled)
+       ) {
+         // don't sync if local state is newer or identical to browser state
+-        if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)) {
++        // (localidraw: the server owns the scene and syncs tabs itself; this
++        // would load the browser-cached scene, which localidraw clears)
++        if (
++          !isLocalidraw &&
++          isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)
++        ) {
+           const localDataState = importFromLocalStorage();
+           const username = importUsernameFromLocalStorage();
+           setLangCode(getPreferredLanguage());
+@@ -721,6 +732,8 @@ const ExcalidrawWrapper = () => {
+       collabAPI.syncElements(elements);
+     }
+ 
++    saveToLocalidraw();
++
+     // this check is redundant, but since this is a hot path, it's best
+     // not to evaludate the nested expression every time
+     if (!LocalData.isSavePaused()) {
+@@ -999,11 +1012,9 @@ const ExcalidrawWrapper = () => {
+ 
+           return (
+             <div className="excalidraw-ui-top-right">
+-              {excalidrawAPI?.getEditorInterface().formFactor === "desktop" && (
+-                <ExcalidrawPlusPromoBanner
+-                  isSignedIn={isExcalidrawPlusSignedUser}
+-                />
+-              )}
++              <a href={GALLERY_URL} className="plus-banner">
++                All diagrams
++              </a>
+ 
+               {collabError.message && <CollabError collabError={collabError} />}
+               <LiveCollaborationTrigger
+diff --git a/excalidraw-app/components/AppMainMenu.tsx b/excalidraw-app/components/AppMainMenu.tsx
+index 8bfae2d5..b53732f2 100644
+--- a/excalidraw-app/components/AppMainMenu.tsx
++++ b/excalidraw-app/components/AppMainMenu.tsx
+@@ -2,6 +2,8 @@ import {
+   loginIcon,
+   ExcalLogo,
+   eyeIcon,
++  PlusIcon,
++  gridIcon,
+ } from "@excalidraw/excalidraw/components/icons";
+ import { useI18n } from "@excalidraw/excalidraw/i18n";
+ import { MainMenu } from "@excalidraw/excalidraw/index";
+@@ -14,6 +16,8 @@ import type { Theme } from "@excalidraw/element/types";
+ import { LanguageList } from "../app-language/LanguageList";
+ import { isExcalidrawPlusSignedUser } from "../app_constants";
+ 
++import { GALLERY_URL } from "../localidraw";
++
+ import { saveDebugState } from "./DebugCanvas";
+ 
+ export const AppMainMenu: React.FC<{
+@@ -26,6 +30,20 @@ export const AppMainMenu: React.FC<{
+   const { t } = useI18n();
+   return (
+     <MainMenu>
++      <MainMenu.Item
++        icon={PlusIcon}
++        onSelect={async () => {
++          const response = await fetch("/localidraw/new", { method: "POST" });
++          const { url } = await response.json();
++          window.open(url, "_blank");
++        }}
++      >
++        New instance
++      </MainMenu.Item>
++      <MainMenu.ItemLink icon={gridIcon} href={GALLERY_URL}>
++        All diagrams
++      </MainMenu.ItemLink>
++      <MainMenu.Separator />
+       <MainMenu.DefaultItems.LoadScene />
+       <MainMenu.DefaultItems.SaveToActiveFile />
+       <MainMenu.DefaultItems.Export />
+diff --git a/excalidraw-app/index.html b/excalidraw-app/index.html
+index 1c29d722..735e530b 100644
+--- a/excalidraw-app/index.html
++++ b/excalidraw-app/index.html
+@@ -214,39 +214,6 @@
+     </header>
+     <div id="root"></div>
+     <script type="module" src="index.tsx"></script>
+-    <% if (typeof PROD != 'undefined' && PROD == true) { %>
+-    <!-- 100% privacy friendly analytics -->
+-    <script>
+-      // need to load this script dynamically bcs. of iframe embed tracking
+-      var scriptEle = document.createElement("script");
+-      scriptEle.setAttribute(
+-        "src",
+-        "https://scripts.simpleanalyticscdn.com/latest.js",
+-      );
+-      scriptEle.setAttribute("type", "text/javascript");
+-      scriptEle.setAttribute("defer", true);
+-      scriptEle.setAttribute("async", true);
+-      // if iframe
+-      if (window.self !== window.top) {
+-        scriptEle.setAttribute("data-auto-collect", true);
+-      }
+-
+-      document.body.appendChild(scriptEle);
+-
+-      // if iframe
+-      if (window.self !== window.top) {
+-        scriptEle.addEventListener("load", () => {
+-          if (window.sa_pageview) {
+-            window.window.sa_event(action, {
+-              category: "iframe",
+-              label: "embed",
+-              value: window.location.pathname,
+-            });
+-          }
+-        });
+-      }
+-    </script>
+-    <!-- end LEGACY GOOGLE ANALYTICS -->
+-    <% } %>
++    <!-- localidraw: no third-party analytics -->
+   </body>
+ </html>
+diff --git a/excalidraw-app/localidraw.ts b/excalidraw-app/localidraw.ts
+new file mode 100644
+index 00000000..9d59187a
+--- /dev/null
++++ b/excalidraw-app/localidraw.ts
+@@ -0,0 +1,190 @@
++import {
++  CaptureUpdateAction,
++  convertToExcalidrawElements,
++  exportToSvg,
++  getSceneVersion,
++  restoreElements,
++} from "@excalidraw/excalidraw";
++import { serializeAsJSON } from "@excalidraw/excalidraw/data/json";
++import { debounce } from "@excalidraw/common";
++import { getNonDeletedElements } from "@excalidraw/element";
++
++import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
++
++import { STORAGE_KEYS } from "./app_constants";
++
++// The localidraw server owns the drawing shown on this port: load it on start,
++// mirror every change back, and pick up edits made elsewhere (e.g. by the CLI).
++
++// This port may have shown a different drawing before, so never restore the
++// scene the browser cached for it; the server's copy is loaded instead.
++localStorage.removeItem(STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS);
++
++// set so App.tsx skips Excalidraw's cross-tab sync from browser storage
++export const isLocalidraw = true;
++
++// served by the localidraw server on its main port
++export const GALLERY_URL = "/localidraw/gallery";
++
++let rev: string | null = null;
++let exists = false;
++let lastSavedVersion = -1;
++let isSaving = false;
++let saving: Promise<void> = Promise.resolve();
++let api: ExcalidrawImperativeAPI | null = null;
++
++const save = async () => {
++  if (!api) {
++    return;
++  }
++  const elements = api.getSceneElementsIncludingDeleted();
++  const appState = api.getAppState();
++  const files = api.getFiles();
++  const version = getSceneVersion(elements);
++  const visibleElements = getNonDeletedElements(elements);
++  // skip untouched blank canvases so they don't clutter the gallery
++  if (
++    rev === null ||
++    version === lastSavedVersion ||
++    (!visibleElements.length && !exists)
++  ) {
++    return;
++  }
++  isSaving = true;
++  try {
++    const svg = await exportToSvg({
++      elements: visibleElements,
++      appState: { ...appState, exportBackground: true },
++      files,
++      skipInliningFonts: true,
++    });
++    const response = await fetch("/localidraw/save", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({
++        rev,
++        scene: serializeAsJSON(elements, appState, files, "local"),
++        // the export format drops the name; keep it for the gallery
++        name: appState.name,
++        svg: svg.outerHTML,
++      }),
++    });
++    if (response.ok) {
++      ({ rev } = await response.json());
++      exists = true;
++      lastSavedVersion = version;
++    } else if (response.status === 409) {
++      // someone else changed the drawing since we loaded it: reload theirs
++      window.location.reload();
++    }
++  } finally {
++    isSaving = false;
++  }
++};
++
++export const saveToLocalidraw = debounce(() => {
++  saving = save();
++}, 1000);
++
++const hasUnsavedChanges = (api: ExcalidrawImperativeAPI) =>
++  getSceneVersion(api.getSceneElementsIncludingDeleted()) !== lastSavedVersion;
++
++const loadScene = async (
++  api: ExcalidrawImperativeAPI,
++  isInitialLoad: boolean,
++) => {
++  const response = await fetch(
++    isInitialLoad ? "/localidraw/scene" : `/localidraw/scene?rev=${rev}`,
++  );
++  if (response.status !== 200) {
++    return;
++  }
++  const data = await response.json();
++  // the user started editing while we were fetching: keep their changes
++  if (!isInitialLoad && (isSaving || hasUnsavedChanges(api))) {
++    return;
++  }
++  const scene = data.scene ?? {};
++  // the CLI may write simplified element skeletons; expand them here
++  // (converted together so arrows can bind to shapes by id)
++  // (converted together so arrows can bind to shapes by id, then put back in
++  // their original order, which is also the drawing order)
++  const rawElements: any[] = scene.elements ?? [];
++  const converted = new Map(
++    convertToExcalidrawElements(
++      rawElements.filter((element) => element.version === undefined),
++      { regenerateIds: false },
++    ).map((element) => [element.id, element]),
++  );
++  const elements = restoreElements(
++    [
++      ...rawElements.map((element) => converted.get(element.id) ?? element),
++      // skeleton labels and bound text have no entry of their own in rawElements
++      ...[...converted.values()].filter(
++        (element) => !rawElements.some((raw) => raw.id === element.id),
++      ),
++    ],
++    null,
++    { repairBindings: true },
++  );
++  api.updateScene({
++    elements,
++    appState: {
++      name: scene.appState?.name ?? null,
++      viewBackgroundColor: scene.appState?.viewBackgroundColor ?? "#ffffff",
++    },
++    captureUpdate: CaptureUpdateAction.NEVER,
++  });
++  if (scene.files) {
++    api.addFiles(Object.values(scene.files));
++  }
++  rev = data.rev;
++  exists = !!data.scene;
++  lastSavedVersion = getSceneVersion(api.getSceneElementsIncludingDeleted());
++  if (isInitialLoad && elements.length) {
++    api.setViewport({ target: elements, fit: "scale-down" });
++  }
++  // drawings written by the CLI have no thumbnail yet: save once to render it
++  if (exists && !data.hasThumb) {
++    lastSavedVersion = -1;
++    saveToLocalidraw();
++  }
++};
++
++export const startLocalidraw = (excalidrawAPI: ExcalidrawImperativeAPI) => {
++  if (api) {
++    return;
++  }
++  api = excalidrawAPI;
++  loadScene(excalidrawAPI, true);
++  window.setInterval(() => {
++    if (rev !== null && !isSaving && !hasUnsavedChanges(excalidrawAPI)) {
++      loadScene(excalidrawAPI, false);
++    }
++  }, 2000);
++  window.addEventListener(
++    "keydown",
++    async (event) => {
++      if (
++        !(event.ctrlKey || event.metaKey) ||
++        event.shiftKey ||
++        event.key.toLowerCase() !== "s"
++      ) {
++        return;
++      }
++      event.preventDefault();
++      event.stopImmediatePropagation();
++      saveToLocalidraw.flush();
++      await saving;
++      const response = await fetch("/localidraw/sync", { method: "POST" });
++      const { synced } = await response.json();
++      excalidrawAPI.setToast({
++        message: synced
++          ? "Synced to Hugging Face"
++          : "Saved locally, will sync when online",
++        duration: 3000,
++      });
++    },
++    { capture: true },
++  );
++};
+diff --git a/excalidraw-app/vite.config.mts b/excalidraw-app/vite.config.mts
+index 21469ebc..a2b6c22c 100644
+--- a/excalidraw-app/vite.config.mts
++++ b/excalidraw-app/vite.config.mts
+@@ -162,6 +162,8 @@ export default defineConfig(({ mode }) => {
+         },
+ 
+         workbox: {
++          // localidraw pages are served by the server, not the app shell
++          navigateFallbackDenylist: [/^\/localidraw\//],
+           // don't precache fonts, locales and separate chunks
+           globIgnores: [
+             "fonts.css",
