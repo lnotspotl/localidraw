@@ -1,0 +1,21 @@
+[workspace]
+channels = ["conda-forge"]
+name = "localidraw"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+clone = { cmd = "bash clone.sh", outputs = ["excalidraw/package.json"] }
+install = { cmd = "yarn install --frozen-lockfile", cwd = "excalidraw", depends-on = ["clone"], inputs = ["excalidraw/yarn.lock"], outputs = ["excalidraw/node_modules/.yarn-integrity"] }
+build = { cmd = "npx vite build", cwd = "excalidraw/excalidraw-app", depends-on = ["install"], inputs = ["excalidraw/excalidraw-app/**/*.{ts,tsx,scss,html,mts}", "excalidraw/packages/*/src/**", "excalidraw/packages/excalidraw/**/*.{ts,tsx,scss}"], outputs = ["excalidraw/excalidraw-app/build/index.html"] }
+lint = "ruff format --check . && ruff check . && mypy"
+fmt = "ruff format . && ruff check --fix ."
+
+[dependencies]
+nodejs = "22.*"
+yarn = "1.22.*"
+python = "3.12.*"
+huggingface_hub = ">=1.24"
+hf-xet = ">=1.5.2,<2"
+ruff = "*"
+mypy = "*"
