@@ -1,6 +1,7 @@
 """Local Excalidraw: a folder gallery, offline-first Hugging Face bucket sync, and a CLI (`localidraw help`).
 
-Drawings live in DATA_DIR/drawings/<id>.excalidraw (+ .svg thumbnail); <id> is "<YYYYmmdd-HHMMSS>-<hostname>".
+Drawings live in DATA_DIR/drawings/<id>.excalidraw (+ .svg thumbnail); <id> is "<YYYYmmdd-HHMMSS>-<hostname>",
+or the name of a bucket drawing saved before ids existed; ids reach the server URL-quoted.
 """
 
 import argparse
@@ -22,7 +23,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 if TYPE_CHECKING:
     from huggingface_hub import BucketFile, HfApi
@@ -462,7 +463,7 @@ def gallery(folder: str) -> str:
         has_thumb = scene_path(d["id"]).with_suffix(".svg").exists()
         edited = datetime.fromtimestamp(d["mtime"]).strftime("%Y-%m-%d %H:%M")
         drawing_id, name = html.escape(d["id"]), html.escape(d["name"])
-        thumb = f'<img src="/thumb/{drawing_id}?v={d["mtime"]}" loading="lazy">' if has_thumb else ""
+        thumb = f'<img src="/thumb/{quote(d["id"])}?v={d["mtime"]}" loading="lazy">' if has_thumb else ""
         (entries if d["folder"] == folder else rest).append(
             f'<div class="item drawing" draggable="true" data-id="{drawing_id}" '
             f'data-in="{html.escape(d["folder"])}" data-name="{name}"'
@@ -819,20 +820,21 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
+        route = unquote(url.path)  # an id can hold spaces and non-ASCII
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         # the gallery port serves the gallery and the API; instance ports serve the app
         if self.drawing_id is None:
-            if url.path == "/":
+            if route == "/":
                 return self.redirect("/localidraw/gallery")
-            if url.path == "/localidraw/gallery":
+            if route == "/localidraw/gallery":
                 return self.send_body(gallery(clean_folder(query.get("folder", ""))), "text/html; charset=utf-8")
-            if url.path == "/api/drawings":
+            if route == "/api/drawings":
                 return self.send_json(drawings())
-            if url.path.startswith("/api/drawings/"):
-                drawing_id = url.path.removeprefix("/api/drawings/")
+            if route.startswith("/api/drawings/"):
+                drawing_id = route.removeprefix("/api/drawings/")
                 return self.send_json(read_scene(drawing_id))
-            if url.path.startswith("/thumb/"):
-                svg_path = scene_path(url.path.removeprefix("/thumb/")).with_suffix(".svg")
+            if route.startswith("/thumb/"):
+                svg_path = scene_path(route.removeprefix("/thumb/")).with_suffix(".svg")
                 if not svg_path.exists():
                     return self.send_error(404)
                 data = svg_path.read_bytes()
@@ -842,14 +844,14 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return None
-            if url.path == "/api/status":
+            if route == "/api/status":
                 return self.send_json({**sync_status, "bucket": BUCKET, "open": port_to_id})
             return self.send_error(404)
-        if url.path == "/localidraw/gallery":
+        if route == "/localidraw/gallery":
             path = scene_path(self.drawing_id)
             folder = folder_of(read_scene(self.drawing_id)) if path.exists() else new_folder.get(self.drawing_id, "")
             return self.redirect(f"http://localhost:{PORT}/localidraw/gallery?folder={quote(folder)}")
-        if url.path == "/localidraw/scene":
+        if route == "/localidraw/scene":
             rev = revision(self.drawing_id)
             if query.get("rev") == rev:
                 return self.send_body("", "text/plain", 204)
@@ -859,7 +861,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self) -> None:
-        url = urlparse(self.path).path
+        url = unquote(urlparse(self.path).path)
         if url in ("/new", "/localidraw/new"):
             data = self.read_form() if self.is_form else self.read_json()
             drawing_id = new_id()
@@ -1034,7 +1036,7 @@ def stop() -> None:
 
 def call(method: str, path: str, data: object = None) -> Any:  # noqa: ANN401
     req = urllib.request.Request(
-        f"http://localhost:{PORT}{path}",
+        f"http://localhost:{PORT}{quote(path)}",
         method=method,
         data=None if data is None else json.dumps(data).encode(),
         headers={"Content-Type": "application/json"},
