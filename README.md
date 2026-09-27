@@ -3,7 +3,8 @@
 Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a Hugging Face bucket, and a CLI.
 
     export PATH="$HOME/localidraw/bin:$PATH"
-    localidraw            # build if needed, start, open http://localhost:3100
+    localidraw start      # build if needed, run in the background (or reuse), open http://localhost:3100
+    localidraw stop       # stop it; it syncs before exiting
     localidraw help       # every command
 
 Drawings are saved to `~/.local/share/localidraw/` first and synced to `hf://buckets/your-hf-user/localidraw` when online;
