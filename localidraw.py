@@ -969,7 +969,10 @@ def serve(*, open_browser: bool) -> None:
         threading.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         print("syncing before exit...", flush=True)
-        print("synced" if sync() else "offline: changes stay local and sync next time", flush=True)
+        ok = sync()
+        print(
+            "synced" if ok else f"offline ({sync_status['error']}): changes stay local and sync next time", flush=True
+        )
 
 
 # ---------------------------------------------------------------- cli
@@ -988,9 +991,9 @@ def start(*, open_browser: bool) -> None:
         print(f"localidraw: already running on http://localhost:{PORT}/localidraw/gallery")
     else:
         ensure_build()
-        env = [
-            f"--setenv={k}={v}" for k, v in os.environ.items() if k.startswith(("LOCALIDRAW_", "HF_")) or k == "PATH"
-        ]
+        # systemd starts services with an empty environment; pass on config, PATH and custom CA bundles
+        passed = ("LOCALIDRAW_", "HF_", "SSL_CERT_", "REQUESTS_CA_BUNDLE", "PATH")
+        env = [f"--setenv={k}={v}" for k, v in os.environ.items() if k.startswith(passed)]
         subprocess.run(
             [
                 "systemd-run",
@@ -1007,12 +1010,11 @@ def start(*, open_browser: bool) -> None:
             ],
             check=True,
         )
-        for _ in range(100):
-            if server_up():
-                break
+        deadline = time.monotonic() + 10  # systemd-run returns at once; wait until the server accepts connections
+        while not server_up():
+            if time.monotonic() > deadline:
+                sys.exit(f"localidraw: {UNIT} did not come up in 10s; see journalctl --user -u {UNIT}")
             time.sleep(0.1)
-        else:
-            sys.exit(f"localidraw: {UNIT} did not come up; see journalctl --user -u {UNIT}")
         print(f"localidraw: started {UNIT} on http://localhost:{PORT}/localidraw/gallery")
     if open_browser:
         webbrowser.open(f"http://localhost:{PORT}/localidraw/gallery")
