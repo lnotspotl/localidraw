@@ -262,7 +262,8 @@ def drawings() -> list[Drawing]:
 def hf() -> "HfApi":
     import warnings
 
-    from huggingface_hub import HfApi, disable_progress_bars
+    from huggingface_hub import HfApi
+    from huggingface_hub.utils.tqdm import disable_progress_bars
 
     disable_progress_bars()
     warnings.filterwarnings("ignore", message=".*not found in bucket.*")  # CLI-made drawings have no thumbnail yet
