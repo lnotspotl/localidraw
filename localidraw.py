@@ -948,11 +948,15 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_error(404)
 
 
-def serve(*, open_browser: bool) -> None:
+def ensure_build() -> None:
     if not (BUILD_DIR / "index.html").exists():
         subprocess.run(
             ["pixi", "run", "--manifest-path", str(Path(__file__).parent / "pixi.toml"), "build"], check=True
         )
+
+
+def serve(*, open_browser: bool) -> None:
+    ensure_build()
     gallery_server = ThreadingHTTPServer(("127.0.0.1", PORT), partial(Handler, directory=BUILD_DIR))
     threading.Thread(target=gallery_server.serve_forever, daemon=True).start()
     threading.Thread(target=sync_loop, daemon=True).start()
@@ -973,6 +977,57 @@ def serve(*, open_browser: bool) -> None:
 
 def server_up() -> bool:
     return not port_is_free(PORT)
+
+
+UNIT = f"localidraw-{PORT}"
+
+
+def start(*, open_browser: bool) -> None:
+    """Run the server as a systemd user service, or reuse the one already on PORT."""
+    if server_up():
+        print(f"localidraw: already running on http://localhost:{PORT}/localidraw/gallery")
+    else:
+        ensure_build()
+        env = [
+            f"--setenv={k}={v}" for k, v in os.environ.items() if k.startswith(("LOCALIDRAW_", "HF_")) or k == "PATH"
+        ]
+        subprocess.run(
+            [
+                "systemd-run",
+                "--user",
+                f"--unit={UNIT}",
+                f"--description=localidraw on :{PORT}",
+                "--collect",
+                "--quiet",
+                *env,
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "serve",
+                "--no-browser",
+            ],
+            check=True,
+        )
+        for _ in range(100):
+            if server_up():
+                break
+            time.sleep(0.1)
+        else:
+            sys.exit(f"localidraw: {UNIT} did not come up; see journalctl --user -u {UNIT}")
+        print(f"localidraw: started {UNIT} on http://localhost:{PORT}/localidraw/gallery")
+    if open_browser:
+        webbrowser.open(f"http://localhost:{PORT}/localidraw/gallery")
+
+
+def stop() -> None:
+    if subprocess.run(["systemctl", "--user", "--quiet", "is-active", UNIT], check=False).returncode == 0:
+        subprocess.run(["systemctl", "--user", "stop", UNIT], check=True)
+        print(f"localidraw: stopped {UNIT}; it syncs on exit, see journalctl --user -u {UNIT}")
+    elif server_up():
+        sys.exit(
+            f"localidraw: the server on port {PORT} was not started with `localidraw start`; stop it where it runs"
+        )
+    else:
+        print("localidraw: not running")
 
 
 def call(method: str, path: str, data: object = None) -> Any:  # noqa: ANN401
@@ -1047,7 +1102,10 @@ def main() -> None:
         prog="localidraw", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = parser.add_subparsers(dest="cmd")
-    p = sub.add_parser("serve", help="start the server and open the gallery (the default)")
+    p = sub.add_parser("start", help="start the server in the background, or reuse a running one (the default)")
+    p.add_argument("--no-browser", action="store_true")
+    sub.add_parser("stop", help="stop the background server; it syncs before exiting")
+    p = sub.add_parser("serve", help="run the server in the foreground")
     p.add_argument("--no-browser", action="store_true")
     sub.add_parser("list", help="list drawings")
     p = sub.add_parser("new", help="create a drawing; elements JSON on stdin")
@@ -1078,8 +1136,12 @@ def main() -> None:
         return print_tree(descend(parser, args.command), " ".join(["localidraw", *args.command]))
     DRAWINGS.mkdir(parents=True, exist_ok=True)
 
-    if args.cmd in (None, "serve"):
-        return serve(open_browser=not getattr(args, "no_browser", False))
+    if args.cmd in (None, "start"):
+        return start(open_browser=not getattr(args, "no_browser", False))
+    if args.cmd == "stop":
+        return stop()
+    if args.cmd == "serve":
+        return serve(open_browser=not args.no_browser)
     if args.cmd == "list":
         for d in drawings():
             print(
@@ -1130,7 +1192,7 @@ def main() -> None:
             delete_drawing(args.id)
     elif args.cmd == "open":
         if not server_up():
-            sys.exit("server not running; start it with `localidraw serve`")
+            sys.exit("server not running; start it with `localidraw start`")
         webbrowser.open(call("POST", "/open", {"id": args.id})["url"])
     return None
 
