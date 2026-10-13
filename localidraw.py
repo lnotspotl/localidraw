@@ -987,6 +987,23 @@ def server_up() -> bool:
 UNIT = f"localidraw-{PORT}"
 
 
+def unit_active() -> bool:
+    return subprocess.run(["systemctl", "--user", "--quiet", "is-active", UNIT], check=False).returncode == 0
+
+
+def status_rows() -> list[dict[str, Any]]:
+    up, dirty = server_up(), len(load_state()["dirty"])
+    origin = f"({UNIT})" if unit_active() else "(not started by localidraw start)"
+    return [
+        {
+            "name": "server",
+            "on": up,
+            "detail": f"http://localhost:{PORT}/localidraw/gallery {origin}" if up else "not running",
+        },
+        {"name": "sync", "on": dirty > 0, "detail": f"{dirty} drawings pending sync" if dirty else "all synced"},
+    ]
+
+
 def start(*, open_browser: bool) -> None:
     """Run the server as a systemd user service, or reuse the one already on PORT."""
     if server_up():
@@ -1023,7 +1040,7 @@ def start(*, open_browser: bool) -> None:
 
 
 def stop() -> None:
-    if subprocess.run(["systemctl", "--user", "--quiet", "is-active", UNIT], check=False).returncode == 0:
+    if unit_active():
         subprocess.run(["systemctl", "--user", "stop", UNIT], check=True)
         print(f"localidraw: stopped {UNIT}; it syncs on exit, see journalctl --user -u {UNIT}")
     elif server_up():
@@ -1133,11 +1150,21 @@ def main() -> None:
     ):
         sub.add_parser(cmd, help=text).add_argument("id")
     sub.add_parser("sync", help="sync with the Hugging Face bucket now")
+    p = sub.add_parser("status", help="what is running: the server, and drawings waiting to sync")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("help", help="print the command tree, or one command's options")
     p.add_argument("command", nargs="*")
     args = parser.parse_args()
     if args.cmd == "help":
         return print_tree(descend(parser, args.command), " ".join(["localidraw", *args.command]))
+    if args.cmd == "status":
+        rows = status_rows()
+        if args.json:
+            return print(json.dumps(rows, separators=(",", ":")))
+        width = max(len(r["name"]) for r in rows)
+        for r in rows:
+            print(f"{r['name']:<{width}}  {'on' if r['on'] else 'off':<3}  {r['detail']}")
+        return None
     DRAWINGS.mkdir(parents=True, exist_ok=True)
 
     if args.cmd in (None, "start"):
