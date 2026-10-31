@@ -1,11 +1,11 @@
 # localidraw
 
-Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a Hugging Face bucket, and a CLI.
+Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a Hugging Face bucket, and an agent-friendly CLI.
 
-![localidraw: install, gallery, drawing, sync](https://github.com/user-attachments/assets/cdb3535e-74c3-4219-b6ef-7fbff41f6328)
+![localidraw: install, agent CLI, gallery, drawing](https://github.com/user-attachments/assets/56f0176c-1752-4bb1-a91a-e709ff32469c)
 
-    uv tool install https://github.com/lnotspotl/localidraw/releases/download/v0.1.0/localidraw-0.1.0-py3-none-any.whl
-    localidraw start      # build if needed, run in the background (or reuse), open http://localhost:3100
+    curl -LsSf https://raw.githubusercontent.com/lnotspotl/localidraw/main/install.sh | sh   # uv if missing, then the latest release
+    localidraw start      # run in the background (or reuse), open http://localhost:3100
     localidraw stop       # stop it; it syncs before exiting
     localidraw status     # is the server up, and are drawings waiting to sync
     localidraw help       # every command
