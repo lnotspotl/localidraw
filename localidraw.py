@@ -73,7 +73,6 @@ class SyncStatus(TypedDict):
 lock = threading.RLock()
 sync_lock = threading.Lock()
 wake_sync = threading.Event()
-servers: dict[int, ThreadingHTTPServer] = {}
 new_folder: dict[str, str] = {}
 port_to_id: dict[int, str] = {}
 sync_status: SyncStatus = {"online": None, "last": None, "error": None}
@@ -101,19 +100,23 @@ def read_scene(drawing_id: str) -> Scene:
     return cast("Scene", json.loads(scene_path(drawing_id).read_text()))
 
 
-def write_scene(drawing_id: str, scene: Scene | str, svg: str | None = None) -> str:
+def history_path(drawing_id: str, kind: str) -> Path:
+    """Where to keep an old copy of a drawing: history/<id>.<timestamp><kind>."""
+    HISTORY.mkdir(exist_ok=True)
+    return HISTORY / f"{drawing_id}.{datetime.now():%Y%m%d-%H%M%S}{kind}"
+
+
+def write_scene(drawing_id: str, scene: Scene, svg: str | None = None) -> str:
     """Write a scene locally, mark it dirty for sync, and return its new revision."""
     path = scene_path(drawing_id)
-    scene = json.loads(scene) if isinstance(scene, str) else scene
     scene.setdefault("localidraw", {})["id"] = drawing_id
-    text = json.dumps(scene, indent=2)
     with lock:
-        if path.exists() and live_elements(json.loads(text)) == 0 and live_elements(read_scene(drawing_id)) > 0:
+        old = read_scene(drawing_id) if path.exists() else None
+        if old and live_elements(scene) == 0 and live_elements(old) > 0:
             # a save that wipes a whole drawing is kept but the old version is backed up
-            HISTORY.mkdir(exist_ok=True)
-            shutil.copy2(path, HISTORY / f"{drawing_id}.{datetime.now():%Y%m%d-%H%M%S}.before-empty.excalidraw")
-        elements_changed = not path.exists() or read_scene(drawing_id).get("elements") != scene.get("elements")
-        path.write_text(text)
+            shutil.copy2(path, history_path(drawing_id, ".before-empty.excalidraw"))
+        elements_changed = old is None or old.get("elements") != scene.get("elements")
+        path.write_text(json.dumps(scene, indent=2))
         svg_path = path.with_suffix(".svg")
         if svg is not None:
             svg_path.write_text(svg)
@@ -140,11 +143,11 @@ def taken_error(name: str, folder: str) -> str:
 
 def remote_path(drawing_id: str) -> str:
     scene = read_scene(drawing_id)
-    name = display_name(drawing_id, scene).replace("/", "∕")
+    name = display_name(drawing_id, scene)
     folder = folder_of(scene)
-    if name != drawing_id and name_taken(display_name(drawing_id, scene), folder, drawing_id):
+    if name != drawing_id and name_taken(name, folder, drawing_id):
         name = f"{name} [{drawing_id}]"  # names are kept unique, but never lose data if they aren't
-    return f"{folder + '/' if folder else ''}{name}.excalidraw"
+    return f"{folder + '/' if folder else ''}{name.replace('/', '∕')}.excalidraw"
 
 
 def clean_folder(folder: str) -> str:
@@ -188,8 +191,7 @@ def delete_drawing(drawing_id: str) -> None:
     """Remove a drawing here now and from the bucket on the next sync; keep a copy in history/."""
     path = scene_path(drawing_id)
     with lock:
-        HISTORY.mkdir(exist_ok=True)
-        shutil.copy2(path, HISTORY / f"{drawing_id}.{datetime.now():%Y%m%d-%H%M%S}.deleted.excalidraw")
+        shutil.copy2(path, history_path(drawing_id, ".deleted.excalidraw"))
         path.unlink()
         path.with_suffix(".svg").unlink(missing_ok=True)
         state = load_state()
@@ -225,8 +227,6 @@ def revision(drawing_id: str) -> str:
 
 def load_state() -> SyncState:
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    for drawing_id, info in state.get("remote", {}).items():
-        info.setdefault("path", f"drawings/{drawing_id}.excalidraw")  # entries from before name-based paths
     state.setdefault("dirty", [])
     state.setdefault("remote", {})  # id -> {"hash", "path"}: bucket content hash and path at last sync
     state.setdefault("deleted", [])  # deleted here, still to be removed from the bucket
@@ -245,11 +245,9 @@ def drawings() -> list[Drawing]:
     items: dict[str, Drawing] = {}
     for path in DRAWINGS.glob("*.excalidraw"):
         scene = json.loads(path.read_text())
-        if scene.get("localidraw", {}).get("deleted"):
-            continue
         items[path.stem] = {
             "id": path.stem,
-            "name": scene.get("appState", {}).get("name") or path.stem,
+            "name": display_name(path.stem, scene),
             "folder": folder_of(scene),
             "mtime": path.stat().st_mtime,
             "status": "pending" if path.stem in state["dirty"] else "synced",
@@ -341,8 +339,7 @@ def _sync(api: "HfApi") -> None:
             if drawing_id in state["dirty"] or drawing_id in state["deleted"]:
                 continue  # changed here too; handled below / next round
             if path.exists():
-                HISTORY.mkdir(exist_ok=True)
-                shutil.copy2(path, HISTORY / f"{drawing_id}.{datetime.now():%Y%m%d-%H%M%S}.excalidraw")
+                shutil.copy2(path, history_path(drawing_id, ".excalidraw"))
             Path(f"{tmp}.excalidraw").replace(path)
             if Path(f"{tmp}.svg").exists():
                 Path(f"{tmp}.svg").replace(path.with_suffix(".svg"))
@@ -359,8 +356,7 @@ def _sync(api: "HfApi") -> None:
             if info["path"] in present or drawing_id in state["dirty"]:
                 continue
             if path.exists():
-                HISTORY.mkdir(exist_ok=True)
-                shutil.move(path, HISTORY / f"{drawing_id}.{datetime.now():%Y%m%d-%H%M%S}.deleted-elsewhere.excalidraw")
+                shutil.move(path, history_path(drawing_id, ".deleted-elsewhere.excalidraw"))
                 path.with_suffix(".svg").unlink(missing_ok=True)
             del state["remote"][drawing_id]
         save_state(state)
@@ -380,7 +376,7 @@ def _sync(api: "HfApi") -> None:
             continue
         current = remote.get(last["path"]) if last else None
         if drawing_id in dirty and last and current and current.xet_hash != last.get("hash"):
-            download(api, last["path"], HISTORY / f"{drawing_id}.{datetime.now():%Y%m%d-%H%M%S}.conflict")
+            download(api, last["path"], history_path(drawing_id, ".conflict"))
         upload[drawing_id] = (target, path.stat().st_mtime_ns)
     if not upload:
         return
@@ -438,10 +434,9 @@ def start_instance(drawing_id: str | None = None) -> int:
                 return port
         drawing_id = drawing_id or new_id()
         port = PORT + 1
-        while port in servers or not port_is_free(port):
+        while port in port_to_id or not port_is_free(port):
             port += 1
         server = ThreadingHTTPServer(("127.0.0.1", port), partial(Handler, directory=BUILD_DIR))
-        servers[port] = server
         port_to_id[port] = drawing_id
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return port
@@ -824,14 +819,6 @@ class Handler(SimpleHTTPRequestHandler):
     def read_json(self) -> Any:  # noqa: ANN401
         return json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
 
-    def read_form(self) -> dict[str, str]:
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
-        return {k: v[0] for k, v in parse_qs(body).items()}
-
-    @property
-    def is_form(self) -> bool:
-        return self.headers.get("Content-Type") == "application/x-www-form-urlencoded"
-
     @property
     def drawing_id(self) -> str | None:
         return port_to_id.get(cast("tuple[str, int]", self.server.server_address)[1])
@@ -880,8 +867,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         url = unquote(urlparse(self.path).path)
+        # served on every port: the app's menu and Ctrl+S post to its own instance port
         if url in ("/new", "/localidraw/new"):
-            data = self.read_form() if self.is_form else self.read_json()
+            data = self.read_json()
             drawing_id = new_id()
             folder = clean_folder(data.get("folder", ""))
             if data.get("name") and name_taken(data["name"], folder):
@@ -893,17 +881,14 @@ class Handler(SimpleHTTPRequestHandler):
                 write_scene(drawing_id, scene)
             elif folder:
                 new_folder[drawing_id] = folder
-            port = start_instance(drawing_id)
-            link = f"http://localhost:{port}"
-            return self.redirect(link) if self.is_form else self.send_json({"id": drawing_id, "url": link})
+            return self.send_json({"id": drawing_id, "url": f"http://localhost:{start_instance(drawing_id)}"})
         if url in ("/open", "/localidraw/open"):
-            data = self.read_form() if self.is_form else self.read_json()
-            link = f"http://localhost:{start_instance(data['id'])}"
-            return self.redirect(link) if self.is_form else self.send_json({"url": link})
+            return self.send_json({"url": f"http://localhost:{start_instance(self.read_json()['id'])}"})
         if url in ("/sync", "/localidraw/sync"):
-            synced = sync()
-            return self.redirect("/localidraw/gallery") if self.is_form else self.send_json({"synced": synced})
-        if url == "/localidraw/save" and self.drawing_id:
+            return self.send_json({"synced": sync()})
+        if self.drawing_id:
+            if url != "/localidraw/save":
+                return self.send_error(404)
             data = self.read_json()
             # a tab that never loaded this drawing (e.g. left open from an earlier
             # server run, when this port held another drawing) must not overwrite it
@@ -915,35 +900,32 @@ class Handler(SimpleHTTPRequestHandler):
             folder = folder_of(read_scene(self.drawing_id)) if path.exists() else new_folder.pop(self.drawing_id, "")
             scene["localidraw"] = {"folder": folder}
             return self.send_json({"rev": write_scene(self.drawing_id, scene, data.get("svg"))})
-        if url == "/delete" and self.drawing_id is None:
-            delete_drawing(self.read_json()["id"])
+        # the gallery port: the gallery's and the CLI's API
+        data = self.read_json()
+        if url == "/delete":
+            delete_drawing(data["id"])
             return self.send_json({})
-        if url == "/rename" and self.drawing_id is None:
-            data = self.read_json()
+        if url == "/rename":
             scene = read_scene(data["id"])
             if name_taken(data["name"], folder_of(scene), data["id"]):
                 return self.send_json({"error": taken_error(data["name"], folder_of(scene))}, 409)
             scene.setdefault("appState", {})["name"] = data["name"]
             return self.send_json({"rev": write_scene(data["id"], scene)})
-        if url == "/order" and self.drawing_id is None:
-            ids = self.read_json()["ids"]  # one folder's drawings
+        if url == "/order":
+            ids = data["ids"]  # one folder's drawings
             old = json.loads(ORDER_FILE.read_text()) if ORDER_FILE.exists() else []
             ORDER_FILE.write_text(json.dumps(ids + [i for i in old if i not in ids]))
             return self.send_json({})
-        if url == "/move" and self.drawing_id is None:
-            data = self.read_json()
+        if url == "/move":
             folder, name = clean_folder(data["folder"]), display_name(data["id"], read_scene(data["id"]))
             if name_taken(name, folder, data["id"]):
                 return self.send_json({"error": taken_error(name, folder)}, 409)
             set_folder(data["id"], folder)
             return self.send_json({})
-        if url == "/folder/new" and self.drawing_id is None:
-            FOLDERS_FILE.write_text(
-                json.dumps(sorted(saved_folders() | {clean_folder(self.read_json()["folder"])} - {""}))
-            )
+        if url == "/folder/new":
+            FOLDERS_FILE.write_text(json.dumps(sorted(saved_folders() | {clean_folder(data["folder"])} - {""})))
             return self.send_json({})
-        if url == "/folder/rename" and self.drawing_id is None:
-            data = self.read_json()
+        if url == "/folder/rename":
             to = clean_folder(data["to"])
             if not to:
                 return self.send_json({"error": "a folder needs a name"}, 400)
@@ -954,17 +936,16 @@ class Handler(SimpleHTTPRequestHandler):
                 )
             move_folder(data["folder"], to)
             return self.send_json({})
-        if url == "/folder/delete" and self.drawing_id is None:
-            old = self.read_json()["folder"]
+        if url == "/folder/delete":
+            old = data["folder"]
             if any(in_folder(d["folder"], old) for d in drawings()):
                 return self.send_json(
                     {"error": "only empty folders can be deleted; move or delete its drawings first"}, 409
                 )
             FOLDERS_FILE.write_text(json.dumps(sorted(f for f in saved_folders() if not in_folder(f, old))))
             return self.send_json({})
-        if url.startswith("/api/drawings/") and self.drawing_id is None:
-            drawing_id = url.removeprefix("/api/drawings/")
-            return self.send_json({"rev": write_scene(drawing_id, self.read_json())})
+        if url.startswith("/api/drawings/"):
+            return self.send_json({"rev": write_scene(url.removeprefix("/api/drawings/"), data)})
         return self.send_error(404)
 
 
