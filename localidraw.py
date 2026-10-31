@@ -1104,6 +1104,22 @@ def update(drawing_id: str, change: Callable[[Scene], object]) -> None:
         write_scene(drawing_id, scene)
 
 
+ZSH_COMPLETION = r"""_localidraw() {
+  local -a entries ids
+  if (( CURRENT == 2 )); then
+    entries=(${(f)"$(localidraw help 2>/dev/null | sed -nE 's/^  ([a-z]+)( [^ ]+)*  +(.+)/\1:\3/p')"})
+    _describe command entries
+  elif (( CURRENT == 3 )) && [[ $words[2] == (show|add|set|rename|mv|rm|open) ]]; then
+    ids=(${${(f)"$(localidraw list 2>/dev/null)"}%%$'\t'*})
+    compadd -a ids
+  else
+    _files
+  fi
+}
+
+compdef _localidraw localidraw
+"""
+
 HELP_EXAMPLES = """examples:
   $ localidraw start
   $ echo '[{"type": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100, "label": {"text": "Box"}}]' \\
@@ -1162,12 +1178,15 @@ def main() -> None:
     sub.add_parser("rm", help="delete a drawing here and in the bucket; a copy stays in history/").add_argument(
         "id", metavar="ID"
     )
+    sub.add_parser("completion", help='print zsh completion; add eval "$(localidraw completion)" to ~/.zshrc')
     p = sub.add_parser("serve")  # no help: what `start` runs, hidden from the command list
     p.add_argument("--no-browser", action="store_true")
     sub.add_parser("help")
     args = parser.parse_args()
     if args.help or args.cmd in (None, "help"):
         return print_help(parser)
+    if args.cmd == "completion":
+        return print(ZSH_COMPLETION, end="")
     if args.cmd == "status":
         rows = status_rows()
         if args.json:
