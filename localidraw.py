@@ -8,6 +8,7 @@ import argparse
 import html
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -1106,27 +1107,25 @@ def update(drawing_id: str, change: Callable[[Scene], object]) -> None:
 
 COMPLETIONS = {
     "zsh": r"""_localidraw() {
-  local -a entries ids
   if (( CURRENT == 2 )); then
-    entries=(${(f)"$(localidraw help 2>/dev/null | sed -nE 's/^  ([a-z]+)( [^ ]+)*  +(.+)/\1:\3/p')"})
+    local -a entries=(@ENTRIES@)
     _describe command entries
-  elif (( CURRENT == 3 )) && [[ $words[2] == (show|add|set|rename|mv|rm|open) ]]; then
-    ids=(${${(f)"$(localidraw list 2>/dev/null)"}%%$'\t'*})
+  elif (( CURRENT == 3 )) && [[ $words[2] == (@IDS@) ]]; then
+    local -a ids=(${${(f)"$(localidraw list 2>/dev/null)"}%%$'\t'*})
     compadd -a ids
   else
     _files
   fi
 }
-
 compdef _localidraw localidraw
 """,
     "bash": r"""_localidraw() {
   local cur=${COMP_WORDS[COMP_CWORD]}
   if (( COMP_CWORD == 1 )); then
-    COMPREPLY=($(compgen -W "$(localidraw help 2>/dev/null | sed -nE 's/^  ([a-z]+)( [^ ]+)*  +.+/\1/p')" -- "$cur"))
+    COMPREPLY=($(compgen -W "@NAMES@" -- "$cur"))
   elif (( COMP_CWORD == 2 )); then
     case ${COMP_WORDS[1]} in
-      show|add|set|rename|mv|rm|open) COMPREPLY=($(compgen -W "$(localidraw list 2>/dev/null | cut -f1)" -- "$cur")) ;;
+      @IDS@) COMPREPLY=($(compgen -W "$(localidraw list 2>/dev/null | cut -f1)" -- "$cur")) ;;
     esac
   fi
 }
@@ -1144,20 +1143,30 @@ Sync: set LOCALIDRAW_BUCKET, and HF_TOKEN or hf auth login. Also: LOCALIDRAW_DAT
 `localidraw <command> --help` shows a command's options."""
 
 
-def print_help(parser: argparse.ArgumentParser) -> None:
-    """List the commands registered with help text, each with its arguments from argparse's own usage line."""
-    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
+type Subcommands = argparse._SubParsersAction[argparse.ArgumentParser]  # noqa: SLF001
+
+
+def print_help(parser: argparse.ArgumentParser, sub: Subcommands) -> None:
     rows = []
     for action in sub._choices_actions:  # noqa: SLF001
-        child = sub.choices[action.dest]
-        args = child.format_usage().removeprefix(f"usage: {child.prog}").replace(" [-h]", "").strip()
-        rows.append((f"{action.dest} {args}".rstrip(), action.help or ""))
+        usage = (
+            sub.choices[action.dest].format_usage().split()[3:]
+        )  # drop "usage: localidraw <cmd>"; joins wrapped lines
+        rows.append((" ".join([action.dest, *(t for t in usage if t != "[-h]")]), action.help or ""))
     width = max(len(cmd) for cmd, _ in rows)
     print("localidraw: local Excalidraw with a folder gallery, Hugging Face sync and an agent-friendly CLI\n")
     print(f"{parser.format_usage()}\ncommands:")
     for cmd, text in rows:
         print(f"  {cmd.ljust(width)}  {text}")
     print(f"\n{HELP_EXAMPLES}")
+
+
+def completion_script(sub: Subcommands, shell: str) -> str:
+    """Bake the commands into the script, so completing them needs no localidraw call."""
+    helps = {a.dest: a.help or "" for a in sub._choices_actions}  # noqa: SLF001
+    ids = "|".join(name for name in helps if any(a.dest == "id" for a in sub.choices[name]._actions))  # noqa: SLF001
+    entries = " ".join(shlex.quote(f"{name}:{text}") for name, text in helps.items())
+    return COMPLETIONS[shell].replace("@ENTRIES@", entries).replace("@NAMES@", " ".join(helps)).replace("@IDS@", ids)
 
 
 def main() -> None:
@@ -1193,14 +1202,14 @@ def main() -> None:
     )
     p = sub.add_parser("completion", help='print shell completion; add eval "$(localidraw completion zsh)" to ~/.zshrc')
     p.add_argument("shell", choices=COMPLETIONS)
-    p = sub.add_parser("serve")  # no help: what `start` runs, hidden from the command list
+    p = sub.add_parser("serve")  # no help=: argparse leaves serve and help out of _choices_actions
     p.add_argument("--no-browser", action="store_true")
     sub.add_parser("help")
     args = parser.parse_args()
     if args.help or args.cmd in (None, "help"):
-        return print_help(parser)
+        return print_help(parser, sub)
     if args.cmd == "completion":
-        return print(COMPLETIONS[args.shell], end="")
+        return print(completion_script(sub, args.shell), end="")
     if args.cmd == "status":
         rows = status_rows()
         if args.json:
