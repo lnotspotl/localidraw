@@ -1,4 +1,3 @@
-# pixi.toml drives development; this builds the wheel released by .github/workflows/release.yml.
 [project]
 name = "localidraw"
 version = "0.1.0"
@@ -18,8 +17,15 @@ build-backend = "hatchling.build"
 include = ["/localidraw.py", "/excalidraw/excalidraw-app/build"]
 ignore-vcs = true
 sources = { "excalidraw/excalidraw-app/build" = "localidraw_web" }
-# Sourcemaps are dev-only, and the 13 MB CJK font falls back to esm.sh (ExcalidrawFontFace.ts), only offline CJK text loses it.
-exclude = ["*.map", "/excalidraw/excalidraw-app/build/fonts/Xiaolai"]
+# Sourcemaps are dev-only; the 13 MB CJK font falls back to esm.sh (ExcalidrawFontFace.ts), so only offline CJK text
+# loses it. The rest is unreferenced or only for the excalidraw.com site and PWA install dialog.
+exclude = [
+    "*.map",
+    "/excalidraw/excalidraw-app/build/fonts/Xiaolai",
+    "/excalidraw/excalidraw-app/build/*.woff2",
+    "/excalidraw/excalidraw-app/build/screenshots",
+    "/excalidraw/excalidraw-app/build/og-image-3.png",
+]
 
 [tool.ruff]
 line-length = 120

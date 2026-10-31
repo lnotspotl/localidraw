@@ -38,6 +38,7 @@ ORDER_FILE = DATA_DIR / "gallery-order.json"  # manual gallery order; unlisted d
 FOLDERS_FILE = DATA_DIR / "folders.json"
 PORT = int(os.environ.get("LOCALIDRAW_PORT", "3100"))
 BUCKET = os.environ.get("LOCALIDRAW_BUCKET", "")
+SYNC_OFF = "set LOCALIDRAW_BUCKET and HF_TOKEN (or hf auth login) to sync"
 SYNC_EVERY = 60
 
 Scene = dict[str, Any]
@@ -280,18 +281,19 @@ def remote_files(api: "HfApi") -> dict[str, "BucketFile"]:
     }
 
 
+def sync_on() -> bool:
+    from huggingface_hub import get_token
+
+    return bool(BUCKET) and get_token() is not None
+
+
 def sync() -> bool:
     """Push local changes and pull remote ones. Returns False when the bucket is unreachable.
 
     Conflicts (changed both here and in the bucket since the last sync) keep the local
     version and save the bucket's version to history/.
     """
-    from huggingface_hub import get_token
-
-    if not BUCKET or not get_token():
-        sync_status.update(
-            {"online": False, "error": "sync disabled: set LOCALIDRAW_BUCKET and HF_TOKEN (or hf auth login)"}
-        )
+    if not sync_on():
         return False
     with sync_lock:
         try:
@@ -493,6 +495,14 @@ def gallery(folder: str) -> str:
     )
     if s["last"]:
         status += f" · last sync {datetime.fromtimestamp(s['last']):%H:%M:%S}"
+    on = sync_on()
+    status = f"{BUCKET} · {status}" if on else SYNC_OFF
+    sync_buttons = (
+        f'<button id="sync" onclick="syncNow()">Sync now</button>\n'
+        f'<a href="https://huggingface.co/buckets/{BUCKET}" target="_blank"><button>Open bucket</button></a>'
+        if on
+        else ""
+    )
     return f"""<!doctype html><meta charset="utf-8"><title>{html.escape(parts[-1] if parts else "localidraw")}</title>
 <style>
 body{{font-family:system-ui;margin:0;background:#fff;color:#1e1e1e;user-select:none}}
@@ -565,14 +575,13 @@ box-shadow:0 4px 12px #0002;padding:.25rem;z-index:10;min-width:10rem}}
 <select id="view" onchange="setView(this.value)">
 <option value="large">Large icons</option><option value="medium">Medium icons</option>
 <option value="small">Small icons</option><option value="details">Details</option></select>
-<button id="sync" onclick="syncNow()">Sync now</button>
-{f'<a href="https://huggingface.co/buckets/{BUCKET}" target="_blank"><button>Open bucket</button></a>' if BUCKET else ""}
+{sync_buttons}
 </div>
 <main>
 <div class="cols"><span>Name</span><span>Date modified</span><span>Status</span><span class="where">Folder</span></div>
 <div id="grid">{"".join(parent + entries + rest)}{"" if entries else '<p class="empty">Right-click for a new drawing or folder.</p>'}</div>
 </main>
-<footer>{len(entries)} item{"" if len(entries) == 1 else "s"} · <span id="syncstatus"><span class="spinner"></span><span>{BUCKET or "no bucket"} · {status}</span></span> · double-click to open, Ctrl/Shift-click to select several, right-click for more, drag to move</footer>
+<footer>{len(entries)} item{"" if len(entries) == 1 else "s"} · <span id="syncstatus"><span class="spinner"></span><span>{status}</span></span> · double-click to open, Ctrl/Shift-click to select several, right-click for more, drag to move</footer>
 <div id="menu"></div>
 <div id="peek"><img></div>
 <div id="marquee"></div>
@@ -892,11 +901,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.redirect(link) if self.is_form else self.send_json({"url": link})
         if url in ("/sync", "/localidraw/sync"):
             synced = sync()
-            return (
-                self.redirect("/localidraw/gallery")
-                if self.is_form
-                else self.send_json({"synced": synced, "error": sync_status["error"]})
-            )
+            return self.redirect("/localidraw/gallery") if self.is_form else self.send_json({"synced": synced})
         if url == "/localidraw/save" and self.drawing_id:
             data = self.read_json()
             # a tab that never loaded this drawing (e.g. left open from an earlier
@@ -976,7 +981,8 @@ def serve(*, open_browser: bool) -> None:
     threading.Thread(target=sync_loop, daemon=True).start()
     wake_sync.set()
     print(
-        f"localidraw: http://localhost:{PORT}/localidraw/gallery  (bucket {BUCKET or 'none'}, data {DATA_DIR})",
+        f"localidraw: http://localhost:{PORT}/localidraw/gallery  "
+        f"({f'bucket {BUCKET}' if sync_on() else SYNC_OFF}, data {DATA_DIR})",
         flush=True,
     )
     if open_browser:
@@ -985,6 +991,8 @@ def serve(*, open_browser: bool) -> None:
     try:
         threading.Event().wait()
     except (KeyboardInterrupt, SystemExit):
+        if not sync_on():
+            return
         print("syncing before exit...", flush=True)
         ok = sync()
         print(
@@ -1015,7 +1023,9 @@ def status_rows() -> list[dict[str, Any]]:
             "on": up,
             "detail": f"http://localhost:{PORT}/localidraw/gallery {origin}" if up else "not running",
         },
-        {"name": "sync", "on": dirty > 0, "detail": f"{dirty} drawings pending sync" if dirty else "all synced"},
+        {"name": "sync", "on": False, "detail": SYNC_OFF}
+        if not sync_on()
+        else {"name": "sync", "on": dirty > 0, "detail": f"{dirty} drawings pending sync" if dirty else "all synced"},
     ]
 
 
@@ -1195,8 +1205,10 @@ def main() -> None:
                 f"{d['folder'] + '/' if d['folder'] else ''}{d['name']}"
             )
     elif args.cmd == "sync":
-        res = call("POST", "/sync") if server_up() else {"synced": sync(), "error": sync_status["error"]}
-        print("synced" if res["synced"] else f"offline: {res['error'] or 'bucket unreachable'}")
+        if not sync_on():
+            sys.exit(SYNC_OFF)
+        ok = call("POST", "/sync")["synced"] if server_up() else sync()
+        print("synced" if ok else f"offline: {sync_status['error'] or 'bucket unreachable'}")
     elif args.cmd == "new":
         elements = stdin_json() or []
         if args.name and name_taken(args.name, ""):
