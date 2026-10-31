@@ -1,6 +1,6 @@
 [project]
 name = "localidraw"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local Excalidraw with a folder gallery, offline-first Hugging Face bucket sync, and a CLI"
 readme = "README.md"
 requires-python = ">=3.12"
