@@ -15,6 +15,8 @@ Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a
     localidraw status     # is the server up, and are drawings waiting to sync
     localidraw help       # every command
 
+For completion, add `eval "$(localidraw completion zsh)"` to `~/.zshrc` (or `bash` to `~/.bashrc`).
+
 Drawings are saved to `~/.local/share/localidraw/` first and synced to the Hugging Face bucket `LOCALIDRAW_BUCKET` when
 online, given `HF_TOKEN` or `hf auth login`; without both, sync is off. The bucket mirrors the gallery's folders. A drawing changed both here and in the bucket keeps the local copy and
 saves the bucket's to `history/`.
