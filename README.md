@@ -4,8 +4,9 @@ Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a
 
 ![localidraw: install, agent CLI, gallery, drawing](https://github.com/user-attachments/assets/56f0176c-1752-4bb1-a91a-e709ff32469c)
 
+### Install
     curl -LsSf https://raw.githubusercontent.com/lnotspotl/localidraw/main/install.sh | sh
-
+### Use
     localidraw start      # run in the background (or reuse), open http://localhost:3100
     localidraw stop       # stop it; it syncs before exiting
     localidraw status     # is the server up, and are drawings waiting to sync
