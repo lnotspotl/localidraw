@@ -1,5 +1,8 @@
 # localidraw
 
+[![CI](https://github.com/lnotspotl/localidraw/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lnotspotl/localidraw/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/github/check-runs/lnotspotl/localidraw/main?nameFilter=test&label=tests)](https://github.com/lnotspotl/localidraw/actions/workflows/ci.yml)
+
 Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a Hugging Face bucket, and an agent-friendly CLI.
 
 ![localidraw: install, agent CLI, gallery, drawing](https://github.com/user-attachments/assets/56f0176c-1752-4bb1-a91a-e709ff32469c)
