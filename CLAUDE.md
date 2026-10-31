@@ -14,5 +14,4 @@ Local Excalidraw with a folder gallery, offline-first sync to a Hugging Face buc
 ## Workflow
 
 - `pixi run lint` (ruff ALL, mypy strict) before every commit; `pixi run fmt` fixes what it can.
-- Every feature is a PR into `main`, squash-merged.
 - Prove UI changes in headless Chrome against a throwaway server; say what wasn't checked with a real mouse.
