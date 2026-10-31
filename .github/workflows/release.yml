@@ -1,0 +1,38 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.11.2
+        with:
+          cache: false
+      - run: pixi run lint
+      - run: pixi run wheel
+      - name: smoke test the installed wheel
+        env:
+          LOCALIDRAW_DATA: ${{ runner.temp }}/data
+          LOCALIDRAW_BUCKET: nobody/none
+          HF_HUB_OFFLINE: "1"
+        run: |
+          pixi run uv tool install dist/*.whl
+          localidraw serve --no-browser &
+          curl -sf --retry 20 --retry-connrefused --retry-delay 1 http://localhost:3100/localidraw/gallery > /dev/null
+          url=$(curl -sf -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:3100/new | jq -r .url)
+          curl -sf "$url" | grep -q 'id="root"'
+      - name: release the tag
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          whl=$(basename dist/*.whl)
+          [ "$TAG" = "v$(echo "$whl" | cut -d- -f2)" ] || { echo "$TAG does not match $whl"; exit 1; }
+          gh release create "$TAG" "dist/$whl" --title "$TAG" \
+            --notes "uv tool install https://github.com/${{ github.repository }}/releases/download/$TAG/$whl"

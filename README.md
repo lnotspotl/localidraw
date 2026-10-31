@@ -2,14 +2,14 @@
 
 Local Excalidraw: one tab per drawing, a folder gallery, offline-first sync to a Hugging Face bucket, and a CLI.
 
-    export PATH="$HOME/localidraw/bin:$PATH"
+    uv tool install https://github.com/lnotspotl/localidraw/releases/download/v0.1.0/localidraw-0.1.0-py3-none-any.whl
     localidraw start      # build if needed, run in the background (or reuse), open http://localhost:3100
     localidraw stop       # stop it; it syncs before exiting
     localidraw status     # is the server up, and are drawings waiting to sync
     localidraw help       # every command
 
-Drawings are saved to `~/.local/share/localidraw/` first and synced to `hf://buckets/kubjn7/localidraw` when online;
-the bucket mirrors the gallery's folders. A drawing changed both here and in the bucket keeps the local copy and
+Drawings are saved to `~/.local/share/localidraw/` first and synced to the Hugging Face bucket `LOCALIDRAW_BUCKET` when
+online, given `HF_TOKEN` or `hf auth login`; without both, sync is off. The bucket mirrors the gallery's folders. A drawing changed both here and in the bucket keeps the local copy and
 saves the bucket's to `history/`.
 
 The CLI takes elements as JSON on stdin, full Excalidraw elements or skeletons:
@@ -18,4 +18,5 @@ The CLI takes elements as JSON on stdin, full Excalidraw elements or skeletons:
       | localidraw new "demo" --open
 
 Config: `LOCALIDRAW_BUCKET`, `LOCALIDRAW_DATA`, `LOCALIDRAW_PORT`. Excalidraw changes live in `localidraw.patch`,
-applied to a pinned upstream commit by `clone.sh`. Lint with `pixi run lint`.
+applied to a pinned upstream commit by `clone.sh`. For development, put `bin/` on `PATH`; lint with `pixi run lint`.
+`pixi run wheel` builds the wheel; pushing a `v<version>` tag matching `pyproject.toml` releases it.

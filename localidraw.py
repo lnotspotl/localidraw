@@ -28,7 +28,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if TYPE_CHECKING:
     from huggingface_hub import BucketFile, HfApi
 
-BUILD_DIR = Path(__file__).parent / "excalidraw" / "excalidraw-app" / "build"
+WHEEL_BUILD_DIR = Path(__file__).parent / "localidraw_web"
+BUILD_DIR = WHEEL_BUILD_DIR if WHEEL_BUILD_DIR.exists() else Path(__file__).parent / "excalidraw/excalidraw-app/build"
 DATA_DIR = Path(os.environ.get("LOCALIDRAW_DATA", Path.home() / ".local/share/localidraw"))
 DRAWINGS = DATA_DIR / "drawings"
 HISTORY = DATA_DIR / "history"
@@ -36,7 +37,7 @@ STATE_FILE = DATA_DIR / "sync-state.json"
 ORDER_FILE = DATA_DIR / "gallery-order.json"  # manual gallery order; unlisted drawings go first, newest first
 FOLDERS_FILE = DATA_DIR / "folders.json"
 PORT = int(os.environ.get("LOCALIDRAW_PORT", "3100"))
-BUCKET = os.environ.get("LOCALIDRAW_BUCKET", "kubjn7/localidraw")
+BUCKET = os.environ.get("LOCALIDRAW_BUCKET", "")
 SYNC_EVERY = 60
 
 Scene = dict[str, Any]
@@ -285,6 +286,13 @@ def sync() -> bool:
     Conflicts (changed both here and in the bucket since the last sync) keep the local
     version and save the bucket's version to history/.
     """
+    from huggingface_hub import get_token
+
+    if not BUCKET or not get_token():
+        sync_status.update(
+            {"online": False, "error": "sync disabled: set LOCALIDRAW_BUCKET and HF_TOKEN (or hf auth login)"}
+        )
+        return False
     with sync_lock:
         try:
             _sync(hf())
@@ -558,13 +566,13 @@ box-shadow:0 4px 12px #0002;padding:.25rem;z-index:10;min-width:10rem}}
 <option value="large">Large icons</option><option value="medium">Medium icons</option>
 <option value="small">Small icons</option><option value="details">Details</option></select>
 <button id="sync" onclick="syncNow()">Sync now</button>
-<a href="https://huggingface.co/buckets/{BUCKET}" target="_blank"><button>Open bucket</button></a>
+{f'<a href="https://huggingface.co/buckets/{BUCKET}" target="_blank"><button>Open bucket</button></a>' if BUCKET else ""}
 </div>
 <main>
 <div class="cols"><span>Name</span><span>Date modified</span><span>Status</span><span class="where">Folder</span></div>
 <div id="grid">{"".join(parent + entries + rest)}{"" if entries else '<p class="empty">Right-click for a new drawing or folder.</p>'}</div>
 </main>
-<footer>{len(entries)} item{"" if len(entries) == 1 else "s"} · <span id="syncstatus"><span class="spinner"></span><span>{BUCKET} · {status}</span></span> · double-click to open, Ctrl/Shift-click to select several, right-click for more, drag to move</footer>
+<footer>{len(entries)} item{"" if len(entries) == 1 else "s"} · <span id="syncstatus"><span class="spinner"></span><span>{BUCKET or "no bucket"} · {status}</span></span> · double-click to open, Ctrl/Shift-click to select several, right-click for more, drag to move</footer>
 <div id="menu"></div>
 <div id="peek"><img></div>
 <div id="marquee"></div>
@@ -884,7 +892,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.redirect(link) if self.is_form else self.send_json({"url": link})
         if url in ("/sync", "/localidraw/sync"):
             synced = sync()
-            return self.redirect("/localidraw/gallery") if self.is_form else self.send_json({"synced": synced})
+            return (
+                self.redirect("/localidraw/gallery")
+                if self.is_form
+                else self.send_json({"synced": synced, "error": sync_status["error"]})
+            )
         if url == "/localidraw/save" and self.drawing_id:
             data = self.read_json()
             # a tab that never loaded this drawing (e.g. left open from an earlier
@@ -963,7 +975,10 @@ def serve(*, open_browser: bool) -> None:
     threading.Thread(target=gallery_server.serve_forever, daemon=True).start()
     threading.Thread(target=sync_loop, daemon=True).start()
     wake_sync.set()
-    print(f"localidraw: http://localhost:{PORT}/localidraw/gallery  (bucket {BUCKET}, data {DATA_DIR})", flush=True)
+    print(
+        f"localidraw: http://localhost:{PORT}/localidraw/gallery  (bucket {BUCKET or 'none'}, data {DATA_DIR})",
+        flush=True,
+    )
     if open_browser:
         webbrowser.open(f"http://localhost:{PORT}/localidraw/gallery")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -1180,8 +1195,8 @@ def main() -> None:
                 f"{d['folder'] + '/' if d['folder'] else ''}{d['name']}"
             )
     elif args.cmd == "sync":
-        ok = call("POST", "/sync")["synced"] if server_up() else sync()
-        print("synced" if ok else f"offline: {sync_status['error'] or 'bucket unreachable'}")
+        res = call("POST", "/sync") if server_up() else {"synced": sync(), "error": sync_status["error"]}
+        print("synced" if res["synced"] else f"offline: {res['error'] or 'bucket unreachable'}")
     elif args.cmd == "new":
         elements = stdin_json() or []
         if args.name and name_taken(args.name, ""):
