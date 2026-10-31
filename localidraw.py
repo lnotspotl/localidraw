@@ -28,7 +28,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 if TYPE_CHECKING:
     from huggingface_hub import BucketFile, HfApi
 
-BUILD_DIR = Path(__file__).parent / "excalidraw" / "excalidraw-app" / "build"
+WHEEL_BUILD_DIR = Path(__file__).parent / "localidraw_web"
+BUILD_DIR = WHEEL_BUILD_DIR if WHEEL_BUILD_DIR.exists() else Path(__file__).parent / "excalidraw/excalidraw-app/build"
 DATA_DIR = Path(os.environ.get("LOCALIDRAW_DATA", Path.home() / ".local/share/localidraw"))
 DRAWINGS = DATA_DIR / "drawings"
 HISTORY = DATA_DIR / "history"
@@ -36,7 +37,8 @@ STATE_FILE = DATA_DIR / "sync-state.json"
 ORDER_FILE = DATA_DIR / "gallery-order.json"  # manual gallery order; unlisted drawings go first, newest first
 FOLDERS_FILE = DATA_DIR / "folders.json"
 PORT = int(os.environ.get("LOCALIDRAW_PORT", "3100"))
-BUCKET = os.environ.get("LOCALIDRAW_BUCKET", "your-hf-user/localidraw")
+BUCKET = os.environ.get("LOCALIDRAW_BUCKET", "")
+SYNC_OFF = "set LOCALIDRAW_BUCKET and HF_TOKEN (or hf auth login) to sync"
 SYNC_EVERY = 60
 
 Scene = dict[str, Any]
@@ -279,12 +281,20 @@ def remote_files(api: "HfApi") -> dict[str, "BucketFile"]:
     }
 
 
+def sync_on() -> bool:
+    from huggingface_hub import get_token
+
+    return bool(BUCKET) and get_token() is not None
+
+
 def sync() -> bool:
     """Push local changes and pull remote ones. Returns False when the bucket is unreachable.
 
     Conflicts (changed both here and in the bucket since the last sync) keep the local
     version and save the bucket's version to history/.
     """
+    if not sync_on():
+        return False
     with sync_lock:
         try:
             _sync(hf())
@@ -485,6 +495,14 @@ def gallery(folder: str) -> str:
     )
     if s["last"]:
         status += f" · last sync {datetime.fromtimestamp(s['last']):%H:%M:%S}"
+    on = sync_on()
+    status = f"{BUCKET} · {status}" if on else SYNC_OFF
+    sync_buttons = (
+        f'<button id="sync" onclick="syncNow()">Sync now</button>\n'
+        f'<a href="https://huggingface.co/buckets/{BUCKET}" target="_blank"><button>Open bucket</button></a>'
+        if on
+        else ""
+    )
     return f"""<!doctype html><meta charset="utf-8"><title>{html.escape(parts[-1] if parts else "localidraw")}</title>
 <style>
 body{{font-family:system-ui;margin:0;background:#fff;color:#1e1e1e;user-select:none}}
@@ -557,14 +575,13 @@ box-shadow:0 4px 12px #0002;padding:.25rem;z-index:10;min-width:10rem}}
 <select id="view" onchange="setView(this.value)">
 <option value="large">Large icons</option><option value="medium">Medium icons</option>
 <option value="small">Small icons</option><option value="details">Details</option></select>
-<button id="sync" onclick="syncNow()">Sync now</button>
-<a href="https://huggingface.co/buckets/{BUCKET}" target="_blank"><button>Open bucket</button></a>
+{sync_buttons}
 </div>
 <main>
 <div class="cols"><span>Name</span><span>Date modified</span><span>Status</span><span class="where">Folder</span></div>
 <div id="grid">{"".join(parent + entries + rest)}{"" if entries else '<p class="empty">Right-click for a new drawing or folder.</p>'}</div>
 </main>
-<footer>{len(entries)} item{"" if len(entries) == 1 else "s"} · <span id="syncstatus"><span class="spinner"></span><span>{BUCKET} · {status}</span></span> · double-click to open, Ctrl/Shift-click to select several, right-click for more, drag to move</footer>
+<footer>{len(entries)} item{"" if len(entries) == 1 else "s"} · <span id="syncstatus"><span class="spinner"></span><span>{status}</span></span> · double-click to open, Ctrl/Shift-click to select several, right-click for more, drag to move</footer>
 <div id="menu"></div>
 <div id="peek"><img></div>
 <div id="marquee"></div>
@@ -963,13 +980,19 @@ def serve(*, open_browser: bool) -> None:
     threading.Thread(target=gallery_server.serve_forever, daemon=True).start()
     threading.Thread(target=sync_loop, daemon=True).start()
     wake_sync.set()
-    print(f"localidraw: http://localhost:{PORT}/localidraw/gallery  (bucket {BUCKET}, data {DATA_DIR})", flush=True)
+    print(
+        f"localidraw: http://localhost:{PORT}/localidraw/gallery  "
+        f"({f'bucket {BUCKET}' if sync_on() else SYNC_OFF}, data {DATA_DIR})",
+        flush=True,
+    )
     if open_browser:
         webbrowser.open(f"http://localhost:{PORT}/localidraw/gallery")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         threading.Event().wait()
     except (KeyboardInterrupt, SystemExit):
+        if not sync_on():
+            return
         print("syncing before exit...", flush=True)
         ok = sync()
         print(
@@ -1000,7 +1023,9 @@ def status_rows() -> list[dict[str, Any]]:
             "on": up,
             "detail": f"http://localhost:{PORT}/localidraw/gallery {origin}" if up else "not running",
         },
-        {"name": "sync", "on": dirty > 0, "detail": f"{dirty} drawings pending sync" if dirty else "all synced"},
+        {"name": "sync", "on": False, "detail": SYNC_OFF}
+        if not sync_on()
+        else {"name": "sync", "on": dirty > 0, "detail": f"{dirty} drawings pending sync" if dirty else "all synced"},
     ]
 
 
@@ -1180,6 +1205,8 @@ def main() -> None:
                 f"{d['folder'] + '/' if d['folder'] else ''}{d['name']}"
             )
     elif args.cmd == "sync":
+        if not sync_on():
+            sys.exit(SYNC_OFF)
         ok = call("POST", "/sync")["synced"] if server_up() else sync()
         print("synced" if ok else f"offline: {sync_status['error'] or 'bucket unreachable'}")
     elif args.cmd == "new":
