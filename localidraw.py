@@ -1104,7 +1104,8 @@ def update(drawing_id: str, change: Callable[[Scene], object]) -> None:
         write_scene(drawing_id, scene)
 
 
-ZSH_COMPLETION = r"""_localidraw() {
+COMPLETIONS = {
+    "zsh": r"""_localidraw() {
   local -a entries ids
   if (( CURRENT == 2 )); then
     entries=(${(f)"$(localidraw help 2>/dev/null | sed -nE 's/^  ([a-z]+)( [^ ]+)*  +(.+)/\1:\3/p')"})
@@ -1118,8 +1119,20 @@ ZSH_COMPLETION = r"""_localidraw() {
 }
 
 compdef _localidraw localidraw
-"""
-
+""",
+    "bash": r"""_localidraw() {
+  local cur=${COMP_WORDS[COMP_CWORD]}
+  if (( COMP_CWORD == 1 )); then
+    COMPREPLY=($(compgen -W "$(localidraw help 2>/dev/null | sed -nE 's/^  ([a-z]+)( [^ ]+)*  +.+/\1/p')" -- "$cur"))
+  elif (( COMP_CWORD == 2 )); then
+    case ${COMP_WORDS[1]} in
+      show|add|set|rename|mv|rm|open) COMPREPLY=($(compgen -W "$(localidraw list 2>/dev/null | cut -f1)" -- "$cur")) ;;
+    esac
+  fi
+}
+complete -o default -F _localidraw localidraw
+""",
+}
 HELP_EXAMPLES = """examples:
   $ localidraw start
   $ echo '[{"type": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100, "label": {"text": "Box"}}]' \\
@@ -1150,7 +1163,7 @@ def print_help(parser: argparse.ArgumentParser) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="localidraw", usage="localidraw <command> [options]", add_help=False)
     parser.add_argument("-h", "--help", action="store_true")
-    sub = parser.add_subparsers(dest="cmd", metavar="<command>")
+    sub = parser.add_subparsers(dest="cmd", metavar="<command>", prog="localidraw")
     p = sub.add_parser("start", help="run the server in the background (or reuse it) and open the gallery")
     p.add_argument("--no-browser", action="store_true", help="don't open the gallery")
     sub.add_parser("stop", help="stop the server; it syncs first")
@@ -1178,7 +1191,8 @@ def main() -> None:
     sub.add_parser("rm", help="delete a drawing here and in the bucket; a copy stays in history/").add_argument(
         "id", metavar="ID"
     )
-    sub.add_parser("completion", help='print zsh completion; add eval "$(localidraw completion)" to ~/.zshrc')
+    p = sub.add_parser("completion", help='print shell completion; add eval "$(localidraw completion zsh)" to ~/.zshrc')
+    p.add_argument("shell", choices=COMPLETIONS)
     p = sub.add_parser("serve")  # no help: what `start` runs, hidden from the command list
     p.add_argument("--no-browser", action="store_true")
     sub.add_parser("help")
@@ -1186,7 +1200,7 @@ def main() -> None:
     if args.help or args.cmd in (None, "help"):
         return print_help(parser)
     if args.cmd == "completion":
-        return print(ZSH_COMPLETION, end="")
+        return print(COMPLETIONS[args.shell], end="")
     if args.cmd == "status":
         rows = status_rows()
         if args.json:
