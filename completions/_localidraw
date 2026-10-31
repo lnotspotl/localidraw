@@ -2,8 +2,8 @@
 
 _localidraw() {
   local -a entries ids
-  if (( CURRENT == 2 )) || [[ $words[2] == help ]]; then
-    entries=(${(f)"$(localidraw help 2>/dev/null | sed -n 's/^[├└]── \([a-z]*\) *\(.*\)/\1:\2/p')"})
+  if (( CURRENT == 2 )); then
+    entries=(${(f)"$(localidraw help 2>/dev/null | sed -nE 's/^  ([a-z]+)( [^ ]+)*  +(.+)/\1:\3/p')"})
     _describe command entries
   elif (( CURRENT == 3 )) && [[ $words[2] == (show|add|set|rename|mv|rm|open) ]]; then
     ids=(${${(f)"$(localidraw list 2>/dev/null)"}%%$'\t'*})

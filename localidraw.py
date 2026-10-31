@@ -1104,84 +1104,70 @@ def update(drawing_id: str, change: Callable[[Scene], object]) -> None:
         write_scene(drawing_id, scene)
 
 
-def subcommands(parser: argparse.ArgumentParser) -> "argparse._SubParsersAction[argparse.ArgumentParser] | None":
-    return next((a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None)  # noqa: SLF001
+HELP_EXAMPLES = """examples:
+  $ localidraw start
+  $ echo '[{"type": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100, "label": {"text": "Box"}}]' \\
+      | localidraw new demo --open
+  $ localidraw list --json
+
+Elements are Excalidraw JSON on stdin: full elements, or skeletons like the rectangle above.
+Sync: set LOCALIDRAW_BUCKET, and HF_TOKEN or hf auth login. Also: LOCALIDRAW_DATA, LOCALIDRAW_PORT.
+`localidraw <command> --help` shows a command's options."""
 
 
-def tree_rows(parser: argparse.ArgumentParser, prefix: str = "") -> list[tuple[str, str]]:
-    """Walk argparse's own subparsers, so the tree cannot drift from the real commands."""
-    sub = subcommands(parser)
-    if sub is None:
-        return []
-    helps = {a.dest: a.help or "" for a in sub._choices_actions}  # noqa: SLF001
-    items = list(sub.choices.items())
+def print_help(parser: argparse.ArgumentParser) -> None:
+    """List the commands registered with help text, each with its arguments from argparse's own usage line."""
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
     rows = []
-    for i, (name, child) in enumerate(items):
-        last = i == len(items) - 1
-        rows.append((f"{prefix}{'└── ' if last else '├── '}{name}", helps.get(name, "")))
-        rows += tree_rows(child, prefix + ("    " if last else "│   "))
-    return rows
-
-
-def print_tree(parser: argparse.ArgumentParser, label: str) -> None:
-    rows = tree_rows(parser)
-    if not rows:  # a leaf has no tree; its options are what's useful
-        parser.print_help()
-        return
-    print(label)
-    width = max(len(row) for row, _ in rows)
-    for row, help_text in rows:
-        print(f"{row.ljust(width)}  {help_text}".rstrip())
-
-
-def descend(parser: argparse.ArgumentParser, path: list[str]) -> argparse.ArgumentParser:
-    for i, name in enumerate(path):
-        sub = subcommands(parser)
-        if sub is None or name not in sub.choices:
-            sys.exit(f"localidraw: no such command: localidraw {' '.join(path[: i + 1])}")
-        parser = sub.choices[name]
-    return parser
+    for action in sub._choices_actions:  # noqa: SLF001
+        child = sub.choices[action.dest]
+        args = child.format_usage().removeprefix(f"usage: {child.prog}").replace(" [-h]", "").strip()
+        rows.append((f"{action.dest} {args}".rstrip(), action.help or ""))
+    width = max(len(cmd) for cmd, _ in rows)
+    print("localidraw: local Excalidraw with a folder gallery, Hugging Face sync and an agent-friendly CLI\n")
+    print(f"{parser.format_usage()}\ncommands:")
+    for cmd, text in rows:
+        print(f"  {cmd.ljust(width)}  {text}")
+    print(f"\n{HELP_EXAMPLES}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="localidraw", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    sub = parser.add_subparsers(dest="cmd")
-    p = sub.add_parser("start", help="start the server in the background, or reuse a running one (the default)")
-    p.add_argument("--no-browser", action="store_true")
-    sub.add_parser("stop", help="stop the background server; it syncs before exiting")
-    p = sub.add_parser("serve", help="run the server in the foreground")
-    p.add_argument("--no-browser", action="store_true")
-    sub.add_parser("list", help="list drawings")
-    p = sub.add_parser("new", help="create a drawing; elements JSON on stdin")
-    p.add_argument("name", nargs="?")
-    p.add_argument("--open", action="store_true")
-    for cmd, text in (
-        ("show", "print a drawing's scene JSON"),
-        ("add", "append elements (JSON array on stdin)"),
-        ("set", "replace elements (JSON array on stdin)"),
-    ):
-        sub.add_parser(cmd, help=text).add_argument("id")
-    p = sub.add_parser("rename", help="rename a drawing")
-    p.add_argument("id")
-    p.add_argument("name")
-    p = sub.add_parser("mv", help='move a drawing to a folder ("a/b"; "" is the top level)')
-    p.add_argument("id")
-    p.add_argument("folder")
-    for cmd, text in (
-        ("rm", "delete a drawing here and in the bucket (a copy stays in history/)"),
-        ("open", "open a drawing in the browser"),
-    ):
-        sub.add_parser(cmd, help=text).add_argument("id")
+    parser = argparse.ArgumentParser(prog="localidraw", usage="localidraw <command> [options]", add_help=False)
+    parser.add_argument("-h", "--help", action="store_true")
+    sub = parser.add_subparsers(dest="cmd", metavar="<command>")
+    p = sub.add_parser("start", help="run the server in the background (or reuse it) and open the gallery")
+    p.add_argument("--no-browser", action="store_true", help="don't open the gallery")
+    sub.add_parser("stop", help="stop the server; it syncs first")
+    p = sub.add_parser("status", help="is the server up, and are drawings waiting to sync")
+    p.add_argument("--json", action="store_true", help="print JSON")
     sub.add_parser("sync", help="sync with the Hugging Face bucket now")
-    p = sub.add_parser("status", help="what is running: the server, and drawings waiting to sync")
-    p.add_argument("--json", action="store_true")
-    p = sub.add_parser("help", help="print the command tree, or one command's options")
-    p.add_argument("command", nargs="*")
+    p = sub.add_parser("list", help="list drawings: id, sync status, date, folder/name")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p = sub.add_parser("new", help="create a drawing from elements on stdin (or empty); prints its id")
+    p.add_argument("name", nargs="?", metavar="NAME", help="drawing name")
+    p.add_argument("--open", action="store_true", help="open it in the browser")
+    for cmd, text in (
+        ("open", "open a drawing in the browser"),
+        ("show", "print a drawing's scene JSON"),
+        ("add", "append elements from stdin"),
+        ("set", "replace the elements with those on stdin"),
+    ):
+        sub.add_parser(cmd, help=text).add_argument("id", metavar="ID")
+    p = sub.add_parser("rename", help="rename a drawing")
+    p.add_argument("id", metavar="ID")
+    p.add_argument("name", metavar="NAME")
+    p = sub.add_parser("mv", help='move a drawing to a folder: "a/b", or "" for the top level')
+    p.add_argument("id", metavar="ID")
+    p.add_argument("folder", metavar="FOLDER")
+    sub.add_parser("rm", help="delete a drawing here and in the bucket; a copy stays in history/").add_argument(
+        "id", metavar="ID"
+    )
+    p = sub.add_parser("serve")  # no help: what `start` runs, hidden from the command list
+    p.add_argument("--no-browser", action="store_true")
+    sub.add_parser("help")
     args = parser.parse_args()
-    if args.cmd == "help":
-        return print_tree(descend(parser, args.command), " ".join(["localidraw", *args.command]))
+    if args.help or args.cmd in (None, "help"):
+        return print_help(parser)
     if args.cmd == "status":
         rows = status_rows()
         if args.json:
@@ -1192,13 +1178,15 @@ def main() -> None:
         return None
     DRAWINGS.mkdir(parents=True, exist_ok=True)
 
-    if args.cmd in (None, "start"):
-        return start(open_browser=not getattr(args, "no_browser", False))
+    if args.cmd == "start":
+        return start(open_browser=not args.no_browser)
     if args.cmd == "stop":
         return stop()
     if args.cmd == "serve":
         return serve(open_browser=not args.no_browser)
     if args.cmd == "list":
+        if args.json:
+            return print(json.dumps(drawings(), separators=(",", ":")))
         for d in drawings():
             print(
                 f"{d['id']}\t{d['status']}\t{datetime.fromtimestamp(d['mtime']):%Y-%m-%d %H:%M}\t"
