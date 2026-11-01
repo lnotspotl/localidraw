@@ -8,16 +8,19 @@ import argparse
 import html
 import json
 import os
+import queue
 import shlex
 import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
 import webbrowser
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
@@ -75,6 +78,7 @@ sync_lock = threading.Lock()
 wake_sync = threading.Event()
 new_folder: dict[str, str] = {}
 port_to_id: dict[int, str] = {}
+exports: defaultdict[str, queue.Queue[bytes]] = defaultdict(queue.Queue)  # keyed by a per-export token
 sync_status: SyncStatus = {"online": None, "last": None, "error": None}
 
 
@@ -501,34 +505,41 @@ def gallery(folder: str) -> str:
     )
     return f"""<!doctype html><meta charset="utf-8"><title>{html.escape(parts[-1] if parts else "localidraw")}</title>
 <style>
-body{{font-family:system-ui;margin:0;background:#fff;color:#1e1e1e;user-select:none}}
-.bar{{display:flex;gap:.5rem;align-items:center;padding:.5rem 1rem;border-bottom:1px solid #e5e5e5;flex-wrap:wrap}}
-.bar button,.bar select{{font:inherit;font-size:.9rem;padding:.3rem .7rem;border:1px solid #d0d0d0;background:#fff;border-radius:4px;cursor:pointer}}
-.bar button:hover{{background:#f0f0f0}}
+:root{{color-scheme:light dark;--bg:#fff;--fg:#1e1e1e;--line:#e5e5e5;--border:#d0d0d0;--hover:#f0f0f0;
+--hi:#e5f3ff;--sel:#cce8ff;--sel-border:#99d1ff;--muted:#666;--faint:#888;--shadow:#0003;--thumb:none}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#121212;--fg:#e3e3e3;--line:#2e2e2e;--border:#444;--hover:#2a2a2a;
+--hi:#1d3046;--sel:#1f4266;--sel-border:#2f6aa3;--muted:#a0a0a0;--shadow:#0009;
+--thumb:invert(93%) hue-rotate(180deg)}}}}
+body{{font-family:system-ui;margin:0;background:var(--bg);color:var(--fg);user-select:none}}
+.bar{{display:flex;gap:.5rem;align-items:center;padding:.5rem 1rem;border-bottom:1px solid var(--line);flex-wrap:wrap}}
+.bar button,.bar select{{font:inherit;font-size:.9rem;padding:.3rem .7rem;border:1px solid var(--border);background:var(--bg);color:inherit;border-radius:4px;cursor:pointer}}
+.bar button:hover{{background:var(--hover)}}
+.bar button[aria-pressed=true]{{background:var(--sel);border-color:var(--sel-border)}}
 #up{{padding:.3rem .5rem;line-height:0}}
 #up:disabled{{opacity:.35;cursor:default}}
-nav{{flex:1;display:flex;align-items:center;border:1px solid #d0d0d0;border-radius:4px;padding:.25rem .5rem;min-width:16rem}}
-nav a{{color:inherit;text-decoration:none;padding:.1rem .4rem;border-radius:3px}}
-nav a:hover,nav a.drop{{background:#e5f3ff}}
-nav a+a::before{{content:"›";color:#888;margin-right:.6rem}}
-input[type=search]{{font:inherit;font-size:.9rem;padding:.3rem .6rem;border:1px solid #d0d0d0;border-radius:4px;width:14rem}}
+nav{{flex:1;display:flex;align-items:center;border:1px solid var(--border);border-radius:4px;padding:.25rem .5rem;min-width:16rem}}
+.bar a{{color:inherit}}
+nav a{{text-decoration:none;padding:.1rem .4rem;border-radius:3px}}
+nav a:hover,nav a.drop{{background:var(--hi)}}
+nav a+a::before{{content:"›";color:var(--faint);margin-right:.6rem}}
+input[type=search]{{font:inherit;font-size:.9rem;padding:.3rem .6rem;border:1px solid var(--border);border-radius:4px;width:14rem}}
 main{{padding:1rem;min-height:calc(100vh - 8rem)}}
-footer{{position:sticky;bottom:0;background:#fff;padding:.3rem 1rem;border-top:1px solid #e5e5e5;font-size:.8rem;color:#666}}
-.spinner{{display:none;width:.7rem;height:.7rem;margin-right:.35rem;vertical-align:-1px;border:2px solid #cce8ff;border-top-color:#1971c2;border-radius:50%;animation:spin .8s linear infinite}}
+footer{{position:sticky;bottom:0;background:var(--bg);padding:.3rem 1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}}
+.spinner{{display:none;width:.7rem;height:.7rem;margin-right:.35rem;vertical-align:-1px;border:2px solid var(--sel);border-top-color:#1971c2;border-radius:50%;animation:spin .8s linear infinite}}
 .syncing .spinner{{display:inline-block}}
 @keyframes spin{{to{{transform:rotate(360deg)}}}}
 #grid{{display:grid;gap:.25rem;align-content:start}}
 .item{{display:flex;flex-direction:column;align-items:center;gap:.3rem;padding:.5rem;border:1px solid transparent;border-radius:3px;cursor:default}}
-.item:hover{{background:#e5f3ff}}
-.item.selected{{background:#cce8ff;border-color:#99d1ff}}
-.item.drop{{background:#cce8ff;border-color:#1971c2}}
+.item:hover{{background:var(--hi)}}
+.item.selected{{background:var(--sel);border-color:var(--sel-border)}}
+.item.drop{{background:var(--sel);border-color:#1971c2}}
 .item.dragging{{opacity:.4}}
 .item[hidden]{{display:none}}
 .icon{{display:flex;align-items:center;justify-content:center;overflow:hidden}}
-.icon img{{max-width:100%;max-height:100%;background:#fff;box-shadow:0 0 0 1px #e5e5e5}}
+.icon img{{max-width:100%;max-height:100%;background:#fff;box-shadow:0 0 0 1px var(--line);filter:var(--thumb)}}
 .icon svg{{width:70%;height:70%}}
 .name{{text-align:center;word-break:break-word;font-size:.9rem}}
-.item small{{display:none;color:#666;font-size:.8rem}}
+.item small{{display:none;color:var(--muted);font-size:.8rem}}
 .large #grid{{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}}
 .large .icon{{width:100%;height:180px}}
 .medium #grid{{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}}
@@ -541,18 +552,18 @@ footer{{position:sticky;bottom:0;background:#fff;padding:.3rem 1rem;border-top:1
 .details #grid{{grid-template-columns:1fr;gap:0}}
 .details .item small{{display:block;width:10rem}}
 .cols{{display:none}}
-.details .cols{{display:flex;gap:.3rem;padding:.2rem .45rem;font-size:.8rem;color:#666;border-bottom:1px solid #e5e5e5;margin-bottom:.2rem}}
+.details .cols{{display:flex;gap:.3rem;padding:.2rem .45rem;font-size:.8rem;color:var(--muted);border-bottom:1px solid var(--line);margin-bottom:.2rem}}
 .cols span{{width:10rem}}
 .cols span:first-child{{flex:1;padding-left:26px}}
-#peek{{position:fixed;display:none;background:#fff;border:1px solid #d0d0d0;border-radius:4px;box-shadow:0 4px 16px #0003;
+#peek{{position:fixed;display:none;background:var(--bg);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 16px var(--shadow);
 padding:.5rem;z-index:5;pointer-events:none}}
 #marquee{{position:fixed;display:none;border:1px solid #1971c2;background:#1971c233;pointer-events:none;z-index:4}}
-#peek img{{display:block;max-width:420px;max-height:320px}}
-#menu{{position:fixed;display:none;flex-direction:column;background:#fff;border:1px solid #d0d0d0;border-radius:4px;
-box-shadow:0 4px 12px #0002;padding:.25rem;z-index:10;min-width:10rem}}
-#menu button{{font:inherit;font-size:.9rem;text-align:left;border:0;background:none;padding:.35rem .8rem;border-radius:3px;cursor:pointer}}
-#menu button:hover{{background:#e5f3ff}}
-.empty{{color:#888}}
+#peek img{{display:block;max-width:420px;max-height:320px;filter:var(--thumb)}}
+#menu{{position:fixed;display:none;flex-direction:column;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+box-shadow:0 4px 12px var(--shadow);padding:.25rem;z-index:10;min-width:10rem}}
+#menu button{{font:inherit;font-size:.9rem;text-align:left;border:0;background:none;color:inherit;padding:.35rem .8rem;border-radius:3px;cursor:pointer}}
+#menu button:hover{{background:var(--hi)}}
+.empty{{color:var(--faint)}}
 .where,.searching .empty{{display:none!important}}
 .searching .where{{display:block!important}}
 </style>
@@ -571,6 +582,7 @@ box-shadow:0 4px 12px #0002;padding:.25rem;z-index:10;min-width:10rem}}
 <select id="view" onchange="setView(this.value)">
 <option value="large">Large icons</option><option value="medium">Medium icons</option>
 <option value="small">Small icons</option><option value="details">Details</option></select>
+<button id="peektoggle" title="Show a larger preview on hover" onclick="setPeek(localStorage.peek === 'off')">Hover preview</button>
 {sync_buttons}
 </div>
 <main>
@@ -602,6 +614,8 @@ async function syncNow() {{
   button.disabled = false;
 }}
 function setView(v) {{ document.documentElement.className = localStorage.view = v; }}
+function setPeek(on) {{ localStorage.peek = on ? "on" : "off"; document.getElementById("peektoggle").ariaPressed = on; }}
+setPeek(localStorage.peek !== "off");
 function up() {{ if (folder) go(folder.split("/").slice(0, -1).join("/")); }}
 const selected = () => [...document.querySelectorAll(".item.selected")];
 const visible = () => [...grid.querySelectorAll(".item:not(.parent):not([hidden])")];
@@ -727,7 +741,7 @@ const peek = document.getElementById("peek");
 let peekTimer = null;
 grid.addEventListener("mouseover", e => {{
   const el = item(e.target), img = el?.querySelector("img");
-  if (!img || el.contains(e.relatedTarget)) return;
+  if (!img || el.contains(e.relatedTarget) || localStorage.peek === "off") return;
   clearTimeout(peekTimer);
   peekTimer = setTimeout(() => {{
     if (dragged || menu.style.display === "flex") return;
@@ -802,8 +816,8 @@ class Handler(SimpleHTTPRequestHandler):
     def send_json(self, data: object, status: int = 200) -> None:
         self.send_body(json.dumps(data), "application/json", status)
 
-    def send_body(self, body: str, content_type: str, status: int = 200) -> None:
-        data = body.encode()
+    def send_body(self, body: str | bytes, content_type: str, status: int = 200) -> None:
+        data = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
@@ -816,8 +830,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Location", url)
         self.end_headers()
 
+    def read_body(self) -> bytes:
+        return self.rfile.read(int(self.headers.get("Content-Length", 0)))
+
     def read_json(self) -> Any:  # noqa: ANN401
-        return json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        return json.loads(self.read_body() or b"{}")
 
     @property
     def drawing_id(self) -> str | None:
@@ -863,6 +880,14 @@ class Handler(SimpleHTTPRequestHandler):
             path = scene_path(self.drawing_id)
             scene = read_scene(self.drawing_id) if path.exists() else None
             return self.send_json({"rev": rev, "scene": scene, "hasThumb": path.with_suffix(".svg").exists()})
+        if route.startswith("/localidraw/export/"):
+            token = route.removeprefix("/localidraw/export/")
+            try:
+                return self.send_body(exports[token].get(timeout=60), "application/octet-stream")
+            except queue.Empty:
+                return self.send_error(504)
+            finally:
+                exports.pop(token, None)
         return super().do_GET()
 
     def do_POST(self) -> None:
@@ -887,6 +912,9 @@ class Handler(SimpleHTTPRequestHandler):
         if url in ("/sync", "/localidraw/sync"):
             return self.send_json({"synced": sync()})
         if self.drawing_id:
+            if url.startswith("/localidraw/export/"):
+                exports[url.removeprefix("/localidraw/export/")].put(self.read_body())
+                return self.send_body("", "text/plain", 204)
             if url != "/localidraw/save":
                 return self.send_error(404)
             data = self.read_json()
@@ -1058,6 +1086,55 @@ def stop() -> None:
         print("localidraw: not running")
 
 
+CHROMES = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+)
+
+
+def require_server() -> None:
+    if not server_up():
+        sys.exit("server not running; start it with `localidraw start`")
+
+
+def export(drawing_id: str, file: Path) -> None:
+    suffix = file.suffix.lower()
+    if suffix not in (".svg", ".png"):
+        sys.exit(f"localidraw: can't export to {file.name}; use a .svg or .png file")
+    require_server()
+    if not scene_path(drawing_id).exists():
+        sys.exit(f"localidraw: no drawing {drawing_id}")
+    chrome = next(filter(None, map(shutil.which, CHROMES)), None)
+    if chrome is None:
+        sys.exit("localidraw: export needs Chrome or Chromium, and neither was found")
+    url, token = call("POST", "/open", {"id": drawing_id})["url"], os.urandom(8).hex()
+    with (
+        tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile,
+        subprocess.Popen(
+            [
+                chrome,
+                "--headless=new",
+                "--disable-gpu",
+                f"--user-data-dir={profile}",
+                f"{url}/?export={suffix[1:]}&token={token}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        ) as browser,
+    ):
+        try:
+            with urllib.request.urlopen(f"{url}/localidraw/export/{token}", timeout=90) as response:
+                file.write_bytes(response.read())
+        except OSError as e:
+            sys.exit(f"localidraw: Chrome did not export {drawing_id}: {e}")
+        finally:
+            os.killpg(browser.pid, signal.SIGKILL)
+
+
 def call(method: str, path: str, data: object = None) -> Any:  # noqa: ANN401
     req = urllib.request.Request(
         f"http://localhost:{PORT}{quote(path)}",
@@ -1178,6 +1255,9 @@ def main() -> None:
     p = sub.add_parser("mv", help='move a drawing to a folder: "a/b", or "" for the top level')
     p.add_argument("id", metavar="ID")
     p.add_argument("folder", metavar="FOLDER")
+    p = sub.add_parser("export", help="export a drawing to FILE, .svg or .png; needs the server and Chrome")
+    p.add_argument("id", metavar="ID")
+    p.add_argument("file", metavar="FILE", type=Path)
     sub.add_parser("rm", help="delete a drawing here and in the bucket; a copy stays in history/").add_argument(
         "id", metavar="ID"
     )
@@ -1260,9 +1340,10 @@ def main() -> None:
         else:
             delete_drawing(args.id)
     elif args.cmd == "open":
-        if not server_up():
-            sys.exit("server not running; start it with `localidraw start`")
+        require_server()
         webbrowser.open(call("POST", "/open", {"id": args.id})["url"])
+    elif args.cmd == "export":
+        export(args.id, args.file)
     return None
 
 
