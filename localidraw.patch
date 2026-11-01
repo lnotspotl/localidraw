@@ -1,5 +1,5 @@
 diff --git a/excalidraw-app/App.tsx b/excalidraw-app/App.tsx
-index 8b9f9403..83cc4f7d 100644
+index 8b9f940..83cc4f7 100644
 --- a/excalidraw-app/App.tsx
 +++ b/excalidraw-app/App.tsx
 @@ -102,6 +102,12 @@ import Collab, {
@@ -70,7 +70,7 @@ index 8b9f9403..83cc4f7d 100644
                {collabError.message && <CollabError collabError={collabError} />}
                <LiveCollaborationTrigger
 diff --git a/excalidraw-app/components/AppMainMenu.tsx b/excalidraw-app/components/AppMainMenu.tsx
-index 8bfae2d5..b53732f2 100644
+index 8bfae2d..b53732f 100644
 --- a/excalidraw-app/components/AppMainMenu.tsx
 +++ b/excalidraw-app/components/AppMainMenu.tsx
 @@ -2,6 +2,8 @@ import {
@@ -113,7 +113,7 @@ index 8bfae2d5..b53732f2 100644
        <MainMenu.DefaultItems.SaveToActiveFile />
        <MainMenu.DefaultItems.Export />
 diff --git a/excalidraw-app/index.html b/excalidraw-app/index.html
-index 1c29d722..735e530b 100644
+index 1c29d72..735e530 100644
 --- a/excalidraw-app/index.html
 +++ b/excalidraw-app/index.html
 @@ -214,39 +214,6 @@
@@ -159,13 +159,14 @@ index 1c29d722..735e530b 100644
  </html>
 diff --git a/excalidraw-app/localidraw.ts b/excalidraw-app/localidraw.ts
 new file mode 100644
-index 00000000..4790a31f
+index 0000000..c08d795
 --- /dev/null
 +++ b/excalidraw-app/localidraw.ts
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,230 @@
 +import {
 +  CaptureUpdateAction,
 +  convertToExcalidrawElements,
++  exportToBlob,
 +  exportToSvg,
 +  getSceneVersion,
 +  restoreElements,
@@ -198,8 +199,31 @@ index 00000000..4790a31f
 +let saving: Promise<void> = Promise.resolve();
 +let api: ExcalidrawImperativeAPI | null = null;
 +
++const exporters: Partial<
++  Record<
++    string,
++    (opts: Parameters<typeof exportToSvg>[0]) => Promise<string | Blob>
++  >
++> = {
++  svg: async (opts) => (await exportToSvg(opts)).outerHTML,
++  png: (opts) =>
++    exportToBlob({
++      ...opts,
++      mimeType: "image/png",
++      // exportScale is only read together with maxWidthOrHeight
++      getDimensions: (width, height) => ({
++        width: width * 2,
++        height: height * 2,
++        scale: 2,
++      }),
++    }),
++};
++const exportParams = new URLSearchParams(location.search);
++const exporter = exporters[exportParams.get("export") ?? ""];
++
 +const save = async () => {
-+  if (!api) {
++  // an export must not change the drawing or mark it for sync
++  if (!api || exporter) {
 +    return;
 +  }
 +  const elements = api.getSceneElementsIncludingDeleted();
@@ -320,6 +344,23 @@ index 00000000..4790a31f
 +    return;
 +  }
 +  api = excalidrawAPI;
++  if (exporter) {
++    (async () => {
++      await loadScene(excalidrawAPI, true);
++      const body = await exporter({
++        elements: getNonDeletedElements(
++          excalidrawAPI.getSceneElementsIncludingDeleted(),
++        ),
++        appState: { ...excalidrawAPI.getAppState(), exportBackground: true },
++        files: excalidrawAPI.getFiles(),
++      });
++      fetch(`/localidraw/export/${exportParams.get("token")}`, {
++        method: "POST",
++        body,
++      });
++    })();
++    return;
++  }
 +  loadScene(excalidrawAPI, true);
 +  window.setInterval(() => {
 +    if (rev !== null && !isSaving && !hasUnsavedChanges(excalidrawAPI)) {
@@ -353,7 +394,7 @@ index 00000000..4790a31f
 +  );
 +};
 diff --git a/excalidraw-app/vite.config.mts b/excalidraw-app/vite.config.mts
-index 21469ebc..a2b6c22c 100644
+index 21469eb..a2b6c22 100644
 --- a/excalidraw-app/vite.config.mts
 +++ b/excalidraw-app/vite.config.mts
 @@ -162,6 +162,8 @@ export default defineConfig(({ mode }) => {
