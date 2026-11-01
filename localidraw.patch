@@ -159,10 +159,10 @@ index 1c29d722..735e530b 100644
  </html>
 diff --git a/excalidraw-app/localidraw.ts b/excalidraw-app/localidraw.ts
 new file mode 100644
-index 00000000..9d59187a
+index 00000000..4790a31f
 --- /dev/null
 +++ b/excalidraw-app/localidraw.ts
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,189 @@
 +import {
 +  CaptureUpdateAction,
 +  convertToExcalidrawElements,
@@ -271,7 +271,6 @@ index 00000000..9d59187a
 +  }
 +  const scene = data.scene ?? {};
 +  // the CLI may write simplified element skeletons; expand them here
-+  // (converted together so arrows can bind to shapes by id)
 +  // (converted together so arrows can bind to shapes by id, then put back in
 +  // their original order, which is also the drawing order)
 +  const rawElements: any[] = scene.elements ?? [];
