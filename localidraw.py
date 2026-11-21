@@ -1254,6 +1254,9 @@ elements (skeletons: set what you need, the rest defaults to the code font, clea
          "startArrowhead": "arrow" makes it two-way. Heads do not shrink: keep arrows 40px or longer.
   icon   {"type": "image", "icon": 4712035, "x": 0, "y": 0, "width": 48, "height": 48}
          "icon" is a Flaticon id; or "src": a URL or a file path (PNG, SVG, JPG)
+  math   {"type": "image", "latex": "\\\\frac{a}{b}", "x": 0, "y": 0, "fontSize": 20}
+         LaTeX display math; fontSize is its 1em and strokeColor its colour. Width and height are set for you,
+         so export to see how much room it takes. A syntax error shows as red text in its place.
 
 style keys: strokeColor, backgroundColor, strokeWidth (1, 2, 4), strokeStyle ("solid", "dashed", "dotted"),
   roundness ({"type": 3} rounds corners, null keeps them sharp), opacity, textAlign, fontSize,
