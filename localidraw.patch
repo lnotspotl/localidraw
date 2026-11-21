@@ -159,10 +159,10 @@ index 1c29d72..735e530 100644
  </html>
 diff --git a/excalidraw-app/localidraw.ts b/excalidraw-app/localidraw.ts
 new file mode 100644
-index 0000000..2d67e2c
+index 0000000..c109d92
 --- /dev/null
 +++ b/excalidraw-app/localidraw.ts
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,326 @@
 +import {
 +  CaptureUpdateAction,
 +  convertToExcalidrawElements,
@@ -172,7 +172,13 @@ index 0000000..2d67e2c
 +  restoreElements,
 +} from "@excalidraw/excalidraw";
 +import { serializeAsJSON } from "@excalidraw/excalidraw/data/json";
-+import { debounce, randomId } from "@excalidraw/common";
++import {
++  DEFAULT_ELEMENT_PROPS,
++  DEFAULT_FONT_SIZE,
++  MIME_TYPES,
++  debounce,
++  randomId,
++} from "@excalidraw/common";
 +import { getNonDeletedElements } from "@excalidraw/element";
 +
 +import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -186,8 +192,8 @@ index 0000000..2d67e2c
 +// scene the browser cached for it; the server's copy is loaded instead.
 +localStorage.removeItem(STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS);
 +
-+// A port is reused across drawings too, so each tab starts from the default
-+// style (code font, clean lines), not the one last picked on this port.
++// Likewise, the font and sloppiness last picked on this port must not replace
++// the defaults for the drawing it shows now.
 +const savedState = JSON.parse(
 +  localStorage.getItem(STORAGE_KEYS.LOCAL_STORAGE_APP_STATE) ?? "{}",
 +);
@@ -287,11 +293,9 @@ index 0000000..2d67e2c
 +  saving = save();
 +}, 1000);
 +
-+// An image skeleton with "latex" becomes an SVG drawn by MathJax, sized so that
-+// 1em is its fontSize. MathJax is only loaded for a drawing that has one.
 +const renderLatex = async (elements: any[]) => {
 +  const equations = elements.filter(
-+    (element) => element.type === "image" && element.latex && !element.fileId,
++    (element) => element.type === "image" && element.latex,
 +  );
 +  if (!equations.length) {
 +    return [];
@@ -323,7 +327,6 @@ index 0000000..2d67e2c
 +    );
 +    const error = svg.match(/data-mjx-error="([^"]*)"/);
 +    if (error) {
-+      // show what is wrong where the equation would be
 +      Object.assign(element, {
 +        type: "text",
 +        text: `LaTeX error: ${error[1]}\n${element.latex}`,
@@ -335,26 +338,30 @@ index 0000000..2d67e2c
 +    const [, , width, height] = svg
 +      .match(/viewBox="([^"]+)"/)![1]
 +      .split(" ")
-+      .map((value) => (Number(value) * (element.fontSize ?? 20)) / 1000);
++      .map(
++        (value) =>
++          (Number(value) * (element.fontSize ?? DEFAULT_FONT_SIZE)) / 1000,
++      );
 +    const sized = svg
 +      .replace(
 +        /width="[^"]+" height="[^"]+"/,
 +        `width="${width}" height="${height}"`,
 +      )
-+      .replaceAll("currentColor", element.strokeColor ?? "#1e1e1e");
++      .replaceAll(
++        "currentColor",
++        element.strokeColor ?? DEFAULT_ELEMENT_PROPS.strokeColor,
++      );
 +    Object.assign(element, {
 +      fileId: randomId(),
 +      status: "saved",
 +      width,
 +      height,
-+      // the image cannot be turned back into its source, so keep it
-+      customData: { latex: element.latex },
 +    });
 +    return [
 +      {
 +        id: element.fileId,
-+        mimeType: "image/svg+xml",
-+        dataURL: `data:image/svg+xml,${encodeURIComponent(sized)}`,
++        mimeType: MIME_TYPES.svg,
++        dataURL: `data:${MIME_TYPES.svg},${encodeURIComponent(sized)}`,
 +        created: Date.now(),
 +      },
 +    ];

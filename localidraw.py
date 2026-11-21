@@ -1158,8 +1158,8 @@ def stdin_json() -> Any:  # noqa: ANN401
 
 
 def embed_images(elements: list[dict[str, Any]]) -> dict[str, Any]:
-    """Embed each image element's "icon" (a Flaticon id) or "src" (a URL or a file); returns the scene files."""
-    files = {}
+    files: dict[str, Any] = {}
+    ids: dict[str, str] = {}
     for element in elements:
         if element.get("type") != "image":
             continue
@@ -1168,6 +1168,10 @@ def embed_images(elements: list[dict[str, Any]]) -> dict[str, Any]:
             src = f"https://cdn-icons-png.flaticon.com/512/{int(icon) // 1000}/{icon}.png"
         if not src:
             continue
+        element.update(status="saved")
+        if src in ids:
+            element["fileId"] = ids[src]
+            continue
         if src.startswith(("http://", "https://")):
             with urllib.request.urlopen(src) as response:
                 data = response.read()
@@ -1175,7 +1179,7 @@ def embed_images(elements: list[dict[str, Any]]) -> dict[str, Any]:
             data = Path(src).read_bytes()
         file_id = hashlib.sha256(data).hexdigest()[:40]
         mime = mimetypes.guess_type(src)[0] or "image/png"
-        element.update(fileId=file_id, status="saved")
+        element["fileId"] = ids[src] = file_id
         files[file_id] = {
             "id": file_id,
             "mimeType": mime,
@@ -1387,10 +1391,10 @@ def main() -> None:
         ok = call("POST", "/sync")["synced"] if server_up() else sync()
         print("synced" if ok else f"offline: {sync_status['error'] or 'bucket unreachable'}")
     elif args.cmd == "new":
-        elements = stdin_json() or []
-        files = embed_images(elements)
         if args.name and name_taken(args.name, ""):
             sys.exit(taken_error(args.name, ""))
+        elements = stdin_json() or []
+        files = embed_images(elements)
         if server_up():
             result = call("POST", "/new", {"name": args.name, "elements": elements, "files": files})
             drawing_id = result["id"]
