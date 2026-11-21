@@ -26,6 +26,9 @@ The CLI takes elements as JSON on stdin, full Excalidraw elements or skeletons:
     echo '[{"type": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100, "label": {"text": "Box"}}]' \
       | localidraw new "demo" --open
 
+New elements default to the code font and clean lines. An image element takes `"icon"`, a Flaticon id, or `"src"`, a
+URL or a file; `localidraw guide` tells an agent how to draw a good diagram and check it.
+
 Config: `LOCALIDRAW_BUCKET`, `LOCALIDRAW_DATA`, `LOCALIDRAW_PORT`. Excalidraw changes live in `localidraw.patch`,
 applied to a pinned upstream commit by `clone.sh`. For development, put `bin/` on `PATH`; lint with `pixi run lint`.
 `pixi run wheel` builds the wheel; pushing a `v<version>` tag matching `pyproject.toml` releases it.

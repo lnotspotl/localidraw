@@ -43,7 +43,7 @@ ignore = [
     "S603",              # advisory only; every subprocess call trips it
     "T201",              # a CLI: printing is the product
     "PLC0415",           # huggingface_hub is imported lazily, so the CLI starts fast
-    "S310",              # urlopen only ever targets our own localhost server
+    "S310",              # urlopen targets our own localhost server, or an image URL the user names
     "S607",              # pixi comes from PATH, deliberately
     # The HTTP handlers and argparse main are dispatch tables, and _sync is one
     # linear four-phase pass; splitting them only scatters the flow.

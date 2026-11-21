@@ -159,10 +159,10 @@ index 1c29d72..735e530 100644
  </html>
 diff --git a/excalidraw-app/localidraw.ts b/excalidraw-app/localidraw.ts
 new file mode 100644
-index 0000000..c08d795
+index 0000000..ae5654f
 --- /dev/null
 +++ b/excalidraw-app/localidraw.ts
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,246 @@
 +import {
 +  CaptureUpdateAction,
 +  convertToExcalidrawElements,
@@ -172,7 +172,7 @@ index 0000000..c08d795
 +  restoreElements,
 +} from "@excalidraw/excalidraw";
 +import { serializeAsJSON } from "@excalidraw/excalidraw/data/json";
-+import { debounce } from "@excalidraw/common";
++import { debounce, randomId } from "@excalidraw/common";
 +import { getNonDeletedElements } from "@excalidraw/element";
 +
 +import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -185,6 +185,18 @@ index 0000000..c08d795
 +// This port may have shown a different drawing before, so never restore the
 +// scene the browser cached for it; the server's copy is loaded instead.
 +localStorage.removeItem(STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS);
++
++// A port is reused across drawings too, so each tab starts from the default
++// style (code font, clean lines), not the one last picked on this port.
++const savedState = JSON.parse(
++  localStorage.getItem(STORAGE_KEYS.LOCAL_STORAGE_APP_STATE) ?? "{}",
++);
++delete savedState.currentItemFontFamily;
++delete savedState.currentItemRoughness;
++localStorage.setItem(
++  STORAGE_KEYS.LOCAL_STORAGE_APP_STATE,
++  JSON.stringify(savedState),
++);
 +
 +// set so App.tsx skips Excalidraw's cross-tab sync from browser storage
 +export const isLocalidraw = true;
@@ -297,7 +309,11 @@ index 0000000..c08d795
 +  // the CLI may write simplified element skeletons; expand them here
 +  // (converted together so arrows can bind to shapes by id, then put back in
 +  // their original order, which is also the drawing order)
-+  const rawElements: any[] = scene.elements ?? [];
++  // a skeleton without an id gets one, so its expansion replaces it below
++  const rawElements: any[] = (scene.elements ?? []).map((element: any) => ({
++    id: randomId(),
++    ...element,
++  }));
 +  const converted = new Map(
 +    convertToExcalidrawElements(
 +      rawElements.filter((element) => element.version === undefined),
@@ -406,3 +422,26 @@ index 21469eb..a2b6c22 100644
            // don't precache fonts, locales and separate chunks
            globIgnores: [
              "fonts.css",
+diff --git a/packages/common/src/constants.ts b/packages/common/src/constants.ts
+index d3927b4..1b4d3a1 100644
+--- a/packages/common/src/constants.ts
++++ b/packages/common/src/constants.ts
+@@ -262,7 +262,8 @@ export const STICKY_NOTE_SHADOW_OFFSET = 3;
+ export const STICKY_NOTE_SHADOW_OPACITY = 0.16;
+ export const STICKY_NOTE_EDGE_SHADOW_WIDTH = 0.5;
+ export const STICKY_NOTE_EDGE_SHADOW_OPACITY = 0.08;
+-export const DEFAULT_FONT_FAMILY: FontFamilyValues = FONT_FAMILY.Excalifont;
++export const DEFAULT_FONT_FAMILY: FontFamilyValues =
++  FONT_FAMILY["Comic Shanns"];
+ export const DEFAULT_TEXT_ALIGN = "left";
+ export const DEFAULT_VERTICAL_ALIGN = "top";
+ export const DEFAULT_VERSION = "{version}";
+@@ -517,7 +518,7 @@ export const DEFAULT_ELEMENT_PROPS: {
+   fillStyle: "solid",
+   strokeWidth: STROKE_WIDTH[DEFAULT_ELEMENT_STROKE_WIDTH_KEY],
+   strokeStyle: "solid",
+-  roughness: ROUGHNESS.artist,
++  roughness: ROUGHNESS.architect,
+   opacity: 100,
+   locked: false,
+ };
