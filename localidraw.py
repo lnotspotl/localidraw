@@ -5,8 +5,11 @@ or the name of a bucket drawing saved before ids existed; ids reach the server U
 """
 
 import argparse
+import base64
+import hashlib
 import html
 import json
+import mimetypes
 import os
 import queue
 import shlex
@@ -902,6 +905,7 @@ class Handler(SimpleHTTPRequestHandler):
             if data.get("elements") or data.get("name"):
                 scene = empty_scene(data.get("name"))
                 scene["elements"] = data.get("elements", [])
+                scene["files"] = data.get("files", {})
                 scene["localidraw"] = {"folder": folder}
                 write_scene(drawing_id, scene)
             elif folder:
@@ -1153,6 +1157,38 @@ def stdin_json() -> Any:  # noqa: ANN401
     return json.loads(text) if text else None
 
 
+def embed_images(elements: list[dict[str, Any]]) -> dict[str, Any]:
+    files: dict[str, Any] = {}
+    ids: dict[str, str] = {}
+    for element in elements:
+        if element.get("type") != "image":
+            continue
+        icon, src = element.pop("icon", None), element.pop("src", None)
+        if icon:
+            src = f"https://cdn-icons-png.flaticon.com/512/{int(icon) // 1000}/{icon}.png"
+        if not src:
+            continue
+        element.update(status="saved")
+        if src in ids:
+            element["fileId"] = ids[src]
+            continue
+        if src.startswith(("http://", "https://")):
+            with urllib.request.urlopen(src) as response:
+                data = response.read()
+        else:
+            data = Path(src).read_bytes()
+        file_id = hashlib.sha256(data).hexdigest()[:40]
+        mime = mimetypes.guess_type(src)[0] or "image/png"
+        element["fileId"] = ids[src] = file_id
+        files[file_id] = {
+            "id": file_id,
+            "mimeType": mime,
+            "dataURL": f"data:{mime};base64,{base64.b64encode(data).decode()}",
+            "created": int(time.time() * 1000),
+        }
+    return files
+
+
 def update(drawing_id: str, change: Callable[[Scene], object]) -> None:
     """Read-modify-write a scene, through the server when running so open tabs refresh."""
     scene = call("GET", f"/api/drawings/{drawing_id}") if server_up() else read_scene(drawing_id)
@@ -1197,8 +1233,59 @@ HELP_EXAMPLES = """examples:
   $ localidraw list --json
 
 Elements are Excalidraw JSON on stdin: full elements, or skeletons like the rectangle above.
+Agents: read `localidraw guide` before drawing: elements, Flaticon icons, and how to check the result.
 Sync: set LOCALIDRAW_BUCKET, and HF_TOKEN or hf auth login. Also: LOCALIDRAW_DATA, LOCALIDRAW_PORT.
 `localidraw <command> --help` shows a command's options."""
+
+
+GUIDE = """localidraw guide: drawing diagrams as an agent
+
+workflow:
+  1. Print the elements as a JSON list from a short script, so the layout is arithmetic, not guesses.
+  2. localidraw start --no-browser; ID=$(python diagram.py | localidraw new "name")
+  3. localidraw export $ID out.png, look at the PNG, fix the script, python diagram.py | localidraw set $ID.
+     Repeat until nothing overlaps and every label fits. Then localidraw open $ID for the user.
+
+elements (skeletons: set what you need, the rest defaults to the code font, clean lines, a black 2px stroke):
+  box    {"type": "rectangle", "id": "agent", "x": 0, "y": 0, "width": 160, "height": 50, "label": {"text": "Agent"}}
+         also "ellipse" and "diamond"; backgroundColor fills it solid. The label takes fontSize and strokeColor,
+         and inherits the box's strokeColor, so set it to "#1e1e1e" in a pastel box. It wraps unless the box is
+         40px wider than the text.
+  text   {"type": "text", "x": 0, "y": 0, "text": "Title", "fontSize": 28}
+  arrow  {"type": "arrow", "x": 80, "y": 50, "points": [[0, 0], [0, 80]],
+          "start": {"id": "agent"}, "end": {"id": "tools"}}
+         always give points, relative to x and y; start and end bind it to boxes; "line" is the same with no head;
+         "startArrowhead": "arrow" makes it two-way. Heads do not shrink: keep arrows 40px or longer.
+  icon   {"type": "image", "icon": 4712035, "x": 0, "y": 0, "width": 48, "height": 48}
+         "icon" is a Flaticon id; or "src": a URL or a file path (PNG, SVG, JPG)
+  math   {"type": "image", "latex": "\\\\frac{a}{b}", "x": 0, "y": 0, "fontSize": 20}
+         LaTeX display math; fontSize is its 1em and strokeColor its colour. Width and height are set for you,
+         so export to see how much room it takes. A syntax error shows as red text in its place.
+
+style keys: strokeColor, backgroundColor, strokeWidth (1, 2, 4), strokeStyle ("solid", "dashed", "dotted"),
+  roundness ({"type": 3} rounds corners, null keeps them sharp), opacity, textAlign, fontSize,
+  fontFamily (8 code, 6 normal, 5 hand-drawn), roughness (0 clean, 1 hand-drawn).
+layout: elements draw in list order, so panels first, then boxes, then arrows, icons and text.
+  The code font is monospace: a character is 0.55 x fontSize wide, a line 1.25 x fontSize tall.
+  With "textAlign": "center" a text's x is its centre, not its left edge. A PNG export is 2x the scene units.
+
+icons from Flaticon:
+  The id is the number ending an icon's page URL: flaticon.com/free-icon/robot_4712035 is 4712035.
+  Find ids with a web search for: flaticon.com/free-icon <thing> "free icons designed by". The site itself
+  refuses scripts, so search is the only source. Check each before use: download
+  https://cdn-icons-png.flaticon.com/512/<id without its last 3 digits>/<id>.png and look at it.
+  Styles vary (glyph, outline, flat colour): fetch a few candidates per concept and keep one style per diagram.
+  Checked ids: 4712035 robot, 994202 brain, 4248402 terminal, 53070 tools, 16901856 checklist, 8671450 stopwatch,
+  878516 people, 6325109 user, 2622694 org chart, 3176336 code window, 5078755 book, 9119230 target,
+  5728403 lightbulb, 1962508 shield, 6607464 bar chart, 2108154 globe, 1466559 layers, 2701814 hourglass.
+  Never write an icon credit into the drawing; tell the user that free Flaticon icons need attribution
+  wherever the figure is published.
+
+paper-figure look (titled panels of labelled boxes and icons):
+  One pastel hue per panel: a rounded panel with a 2px stroke in the hue, a large title above its top edge,
+  dashed inner groups in the same hue, small boxes filled with a light tint of it. Icons 32-48px, left of their label.
+  Fonts: 28 panel titles, 20 group titles, 16 labels. Keep 16px or more between neighbours.
+"""
 
 
 type Subcommands = argparse._SubParsersAction[argparse.ArgumentParser]  # noqa: SLF001
@@ -1261,6 +1348,7 @@ def main() -> None:
     sub.add_parser("rm", help="delete a drawing here and in the bucket; a copy stays in history/").add_argument(
         "id", metavar="ID"
     )
+    sub.add_parser("guide", help="print how to draw good diagrams: elements, icons, checking the result")
     p = sub.add_parser("completion", help='print shell completion; add eval "$(localidraw completion zsh)" to ~/.zshrc')
     p.add_argument("shell", choices=COMPLETIONS)
     p = sub.add_parser("serve")  # no help=: argparse leaves serve and help out of _choices_actions
@@ -1269,6 +1357,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.help or args.cmd in (None, "help"):
         return print_help(parser, sub)
+    if args.cmd == "guide":
+        return print(GUIDE, end="")
     if args.cmd == "completion":
         return print(completion_script(sub, args.shell), end="")
     if args.cmd == "status":
@@ -1301,11 +1391,12 @@ def main() -> None:
         ok = call("POST", "/sync")["synced"] if server_up() else sync()
         print("synced" if ok else f"offline: {sync_status['error'] or 'bucket unreachable'}")
     elif args.cmd == "new":
-        elements = stdin_json() or []
         if args.name and name_taken(args.name, ""):
             sys.exit(taken_error(args.name, ""))
+        elements = stdin_json() or []
+        files = embed_images(elements)
         if server_up():
-            result = call("POST", "/new", {"name": args.name, "elements": elements})
+            result = call("POST", "/new", {"name": args.name, "elements": elements, "files": files})
             drawing_id = result["id"]
             if args.open:
                 webbrowser.open(result["url"])
@@ -1313,6 +1404,7 @@ def main() -> None:
             drawing_id = new_id()
             scene = empty_scene(args.name)
             scene["elements"] = elements
+            scene["files"] = files
             write_scene(drawing_id, scene)
         print(drawing_id)
     elif args.cmd == "show":
@@ -1320,10 +1412,12 @@ def main() -> None:
         print(json.dumps(scene, indent=2))
     elif args.cmd == "add":
         elements = stdin_json() or []
-        update(args.id, lambda s: s["elements"].extend(elements))
+        files = embed_images(elements)
+        update(args.id, lambda s: (s["elements"].extend(elements), s.setdefault("files", {}).update(files)))
     elif args.cmd == "set":
         elements = stdin_json() or []
-        update(args.id, lambda s: s.update(elements=elements))
+        files = embed_images(elements)
+        update(args.id, lambda s: s.update(elements=elements, files=s.get("files", {}) | files))
     elif args.cmd == "rename":
         folder = folder_of(read_scene(args.id))
         if name_taken(args.name, folder, args.id):
